@@ -1,0 +1,4 @@
+FROM gcr.io/distroless/static:nonroot
+COPY dist/go2rtc /usr/local/bin/go2rtc
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/go2rtc"]

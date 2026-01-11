@@ -116,6 +116,16 @@
     },
     "homekit": {
       "type": "object",
+      "properties": {
+        "advertise_ip": {
+          "description": "Override IP address advertised via mDNS and in HomeKit SRTP endpoint replies",
+          "type": "string"
+        },
+        "hds_port_range": {
+          "description": "HomeKit Data Stream (HDS) TCP listen port or range, for example \"30000-30100\"",
+          "type": "string"
+        }
+      },
       "additionalProperties": {
         "type": "object",
         "properties": {

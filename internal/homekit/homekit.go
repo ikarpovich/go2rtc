@@ -2,6 +2,7 @@ package homekit
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 
@@ -19,13 +20,17 @@ import (
 
 func Init() {
 	var cfg struct {
-		Mod map[string]struct {
-			Pin           string   `yaml:"pin"`
-			Name          string   `yaml:"name"`
-			DeviceID      string   `yaml:"device_id"`
-			DevicePrivate string   `yaml:"device_private"`
-			CategoryID    string   `yaml:"category_id"`
-			Pairings      []string `yaml:"pairings"`
+		Mod struct {
+			AdvertiseIP  string `yaml:"advertise_ip"`
+			HDSPortRange string `yaml:"hds_port_range"`
+			Streams      map[string]struct {
+				Pin           string   `yaml:"pin"`
+				Name          string   `yaml:"name"`
+				DeviceID      string   `yaml:"device_id"`
+				DevicePrivate string   `yaml:"device_private"`
+				CategoryID    string   `yaml:"category_id"`
+				Pairings      []string `yaml:"pairings"`
+			} `yaml:",inline"`
 		} `yaml:"homekit"`
 	}
 	app.LoadConfig(&cfg)
@@ -38,15 +43,17 @@ func Init() {
 	api.HandleFunc("api/homekit/accessories", apiHomekitAccessories)
 	api.HandleFunc("api/discovery/homekit", apiDiscovery)
 
-	if cfg.Mod == nil {
+	if cfg.Mod.Streams == nil {
 		return
 	}
 
 	hosts = map[string]*server{}
 	servers = map[string]*server{}
 	var entries []*mdns.ServiceEntry
+	advertiseIP := parseAdvertiseIP(cfg.Mod.AdvertiseIP)
+	hdsMinPort, hdsMaxPort := parsePortRange(cfg.Mod.HDSPortRange)
 
-	for id, conf := range cfg.Mod {
+	for id, conf := range cfg.Mod.Streams {
 		stream := streams.Get(id)
 		if stream == nil {
 			log.Warn().Msgf("[homekit] missing stream: %s", id)
@@ -68,9 +75,12 @@ func Init() {
 		setupID := calcSetupID(id)
 
 		srv := &server{
-			stream:   id,
-			pairings: conf.Pairings,
-			setupID:  setupID,
+			stream:      id,
+			pairings:    conf.Pairings,
+			setupID:     setupID,
+			advertiseIP: advertiseIP,
+			hdsMinPort:  hdsMinPort,
+			hdsMaxPort:  hdsMaxPort,
 		}
 
 		srv.hap = &hap.Server{
@@ -83,6 +93,7 @@ func Init() {
 		srv.mdns = &mdns.ServiceEntry{
 			Name: name,
 			Port: uint16(api.Port),
+			IP:   net.ParseIP(advertiseIP),
 			Info: map[string]string{
 				hap.TXTConfigNumber: "1",
 				hap.TXTFeatureFlags: "0",
@@ -208,4 +219,44 @@ func parseBitrate(s string) int {
 	}
 
 	return k * core.Atoi(s)
+}
+
+func parseAdvertiseIP(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+
+	if ip := net.ParseIP(raw); ip != nil {
+		return ip.String()
+	}
+
+	log.Warn().Msgf("[homekit] invalid advertise_ip: %q", raw)
+	return ""
+}
+
+func parsePortRange(raw string) (int, int) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, 0
+	}
+
+	min, max, ok := strings.Cut(raw, "-")
+	if !ok {
+		port := core.Atoi(raw)
+		if port > 0 && port <= 65535 {
+			return port, port
+		}
+		log.Warn().Msgf("[homekit] invalid hds_port_range: %q", raw)
+		return 0, 0
+	}
+
+	minPort := core.Atoi(strings.TrimSpace(min))
+	maxPort := core.Atoi(strings.TrimSpace(max))
+	if minPort <= 0 || maxPort <= 0 || minPort > maxPort || maxPort > 65535 {
+		log.Warn().Msgf("[homekit] invalid hds_port_range: %q", raw)
+		return 0, 0
+	}
+
+	return minPort, maxPort
 }

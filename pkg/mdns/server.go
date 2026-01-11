@@ -113,6 +113,9 @@ func AppendDNSSD(msg *dns.Msg, service string) {
 }
 
 func AppendEntry(msg *dns.Msg, entry *ServiceEntry, service string, ip net.IP) {
+	if entry.IP != nil {
+		ip = entry.IP
+	}
 	ptrName := entry.name() + "." + service
 	srvName := entry.name() + ".local."
 

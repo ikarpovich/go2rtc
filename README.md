@@ -1071,6 +1071,8 @@ streams:
     - ffmpeg:dahua1#audio=opus           # only OPUS audio supported by HomeKit
 
 homekit:
+  advertise_ip: 192.168.1.10  # optional override for mDNS/SRTP IP
+  hds_port_range: 30000-30100 # optional TCP port range for HomeKit Data Stream
   dahua1:                   # same stream ID from streams list
     pin: 12345678           # custom PIN, default: 19550224
     name: Dahua camera      # custom camera name, default: generated from stream ID

@@ -22,13 +22,14 @@ type Consumer struct {
 
 	deadline *time.Timer
 
+	advertiseIP  string
 	sessionID    string
 	videoSession *srtp.Session
 	audioSession *srtp.Session
 	audioRTPTime byte
 }
 
-func NewConsumer(conn net.Conn, server *srtp.Server) *Consumer {
+func NewConsumer(conn net.Conn, server *srtp.Server, advertiseIP string) *Consumer {
 	medias := []*core.Media{
 		{
 			Kind:      core.KindVideo,
@@ -54,8 +55,9 @@ func NewConsumer(conn net.Conn, server *srtp.Server) *Consumer {
 			Medias:     medias,
 			Transport:  conn,
 		},
-		conn: conn,
-		srtp: server,
+		conn:        conn,
+		srtp:        server,
+		advertiseIP: advertiseIP,
 	}
 }
 
@@ -189,9 +191,13 @@ func (c *Consumer) Stop() error {
 }
 
 func (c *Consumer) srtpEndpoint() *srtp.Endpoint {
-	addr := c.conn.LocalAddr().(*net.TCPAddr)
+	ip := c.advertiseIP
+	if ip == "" {
+		addr := c.conn.LocalAddr().(*net.TCPAddr)
+		ip = addr.IP.To4().String()
+	}
 	return &srtp.Endpoint{
-		Addr:       addr.IP.To4().String(),
+		Addr:       ip,
 		Port:       uint16(c.srtp.Port()),
 		MasterKey:  []byte(core.RandString(16, 0)),
 		MasterSalt: []byte(core.RandString(14, 0)),

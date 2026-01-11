@@ -42,6 +42,9 @@ type server struct {
 	proxyURL  string
 	setupID   string
 	stream    string // stream name from YAML
+	advertiseIP string
+	hdsMinPort  int
+	hdsMaxPort  int
 }
 
 func (s *server) MarshalJSON() ([]byte, error) {
@@ -273,9 +276,8 @@ func (s *server) SetCharacteristic(conn net.Conn, aid uint8, iid uint64, value a
 			return
 		}
 
-		consumer := homekit.NewConsumer(conn, srtp2.Server)
-		consumer.SetOffer(&offer)
-		s.consumer = consumer
+		s.consumer = homekit.NewConsumer(conn, srtp2.Server, s.advertiseIP)
+		s.consumer.SetOffer(&offer)
 
 	case camera.TypeSelectedStreamConfiguration:
 		var conf camera.SelectedStreamConfiguration
