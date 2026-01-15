@@ -2,6 +2,8 @@ package camera
 
 import (
 	"errors"
+	"fmt"
+	"os"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/hap"
@@ -80,16 +82,22 @@ func NewStream(
 func (s *Stream) GetFreeStream() error {
 	acc, err := s.client.GetFirstAccessory()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG-HK] GetFreeStream: GetFirstAccessory error: %v\n", err)
 		return err
 	}
 
-	for _, srv := range acc.Services {
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] GetFreeStream: Found %d services\n", len(acc.Services))
+
+	for i, srv := range acc.Services {
 		for _, char := range srv.Characters {
 			if char.Type == TypeStreamingStatus {
 				var status StreamingStatus
 				if err = char.ReadTLV8(&status); err != nil {
+					fmt.Fprintf(os.Stderr, "[DEBUG-HK] GetFreeStream: Service %d ReadTLV8 error: %v\n", i, err)
 					return err
 				}
+
+				fmt.Fprintf(os.Stderr, "[DEBUG-HK] GetFreeStream: Service %d StreamingStatus=%d (0=available)\n", i, status.Status)
 
 				if status.Status == StreamingStatusAvailable {
 					s.service = srv
@@ -99,6 +107,7 @@ func (s *Stream) GetFreeStream() error {
 		}
 	}
 
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] GetFreeStream: No free streams found!\n")
 	return errors.New("hap: no free streams")
 }
 
@@ -121,6 +130,9 @@ func (s *Stream) ExchangeEndpoints(videoSession, audioSession *srtp.Session) err
 		},
 	}
 
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] ExchangeEndpoints REQUEST: LocalAddr=%s VideoPort=%d AudioPort=%d SessionID=%s\n",
+		videoSession.Local.Addr, videoSession.Local.Port, audioSession.Local.Port, s.id)
+
 	char := s.service.GetCharacter(TypeSetupEndpoints)
 	if err := char.Write(&req); err != nil {
 		return err
@@ -136,6 +148,9 @@ func (s *Stream) ExchangeEndpoints(videoSession, audioSession *srtp.Session) err
 	if err := char.ReadTLV8(&res); err != nil {
 		return err
 	}
+
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] ExchangeEndpoints RESPONSE: RemoteAddr=%s VideoPort=%d AudioPort=%d VideoSSRC=%d AudioSSRC=%d Status=%d\n",
+		res.Address.IPAddr, res.Address.VideoRTPPort, res.Address.AudioRTPPort, res.VideoSSRC, res.AudioSSRC, res.Status)
 
 	videoSession.Remote = &srtp.Endpoint{
 		Addr:       res.Address.IPAddr,

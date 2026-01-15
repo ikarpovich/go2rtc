@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
@@ -116,6 +117,8 @@ func (c *Client) Start() error {
 		return c.startMJPEG()
 	}
 
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] Start() called for %s\n", c.RemoteAddr)
+
 	videoTrack := c.trackByKind(core.KindVideo)
 	videoCodec := trackToVideo(videoTrack, &c.videoConfig.Codecs[0], c.MaxWidth, c.MaxHeight)
 
@@ -125,19 +128,32 @@ func (c *Client) Start() error {
 	c.videoSession = &srtp.Session{Local: c.srtpEndpoint()}
 	c.audioSession = &srtp.Session{Local: c.srtpEndpoint()}
 
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] Video SRTP local: %s:%d SSRC=%d\n", c.videoSession.Local.Addr, c.videoSession.Local.Port, c.videoSession.Local.SSRC)
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] Audio SRTP local: %s:%d SSRC=%d\n", c.audioSession.Local.Addr, c.audioSession.Local.Port, c.audioSession.Local.SSRC)
+
 	var err error
 	c.stream, err = camera.NewStream(c.hap, videoCodec, audioCodec, c.videoSession, c.audioSession, c.Bitrate)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG-HK] camera.NewStream error: %v\n", err)
 		return err
 	}
+
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] Stream created, adding SRTP sessions\n")
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] Video SRTP remote: %s:%d SSRC=%d\n", c.videoSession.Remote.Addr, c.videoSession.Remote.Port, c.videoSession.Remote.SSRC)
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] Audio SRTP remote: %s:%d SSRC=%d\n", c.audioSession.Remote.Addr, c.audioSession.Remote.Port, c.audioSession.Remote.SSRC)
 
 	c.srtp.AddSession(c.videoSession)
 	c.srtp.AddSession(c.audioSession)
 
 	deadline := time.NewTimer(core.ConnDeadline)
 
+	packetCount := 0
 	if videoTrack != nil {
 		c.videoSession.OnReadRTP = func(packet *rtp.Packet) {
+			packetCount++
+			if packetCount <= 5 || packetCount%100 == 0 {
+				fmt.Fprintf(os.Stderr, "[DEBUG-HK] Got video RTP packet #%d, len=%d\n", packetCount, len(packet.Payload))
+			}
 			deadline.Reset(core.ConnDeadline)
 			videoTrack.WriteRTP(packet)
 			c.Recv += len(packet.Payload)
@@ -161,7 +177,9 @@ func (c *Client) Start() error {
 		c.audioSession.OnReadRTP = timekeeper(c.audioSession.OnReadRTP)
 	}
 
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] Waiting for RTP packets (timeout=%v)...\n", core.ConnDeadline)
 	<-deadline.C
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] Deadline reached, received %d video packets, total bytes=%d\n", packetCount, c.Recv)
 
 	return nil
 }
