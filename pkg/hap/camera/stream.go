@@ -191,7 +191,17 @@ func (s *Stream) SetStreamConfig(config *SelectedStreamConfiguration) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: Response value=%v\n", char.Value)
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: Response value=%v type=%T\n", char.Value, char.Value)
+
+	// Try to decode response as SelectedStreamConfiguration to see status
+	var respConfig SelectedStreamConfiguration
+	if err := char.ReadTLV8(&respConfig); err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: Cannot decode response: %v\n", err)
+	} else {
+		fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: Response decoded - Command=%d SessionID=%s\n",
+			respConfig.Control.Command, respConfig.Control.SessionID)
+	}
+
 	return nil
 }
 

@@ -118,6 +118,7 @@ func (c *Client) Start() error {
 	}
 
 	fmt.Fprintf(os.Stderr, "[DEBUG-HK] Start() called for %s\n", c.RemoteAddr)
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] Doorbell supported config:\n%s\n", c.SDP)
 
 	videoTrack := c.trackByKind(core.KindVideo)
 	videoCodec := trackToVideo(videoTrack, &c.videoConfig.Codecs[0], c.MaxWidth, c.MaxHeight)
