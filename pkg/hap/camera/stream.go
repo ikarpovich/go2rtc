@@ -172,15 +172,27 @@ func (s *Stream) ExchangeEndpoints(videoSession, audioSession *srtp.Session) err
 }
 
 func (s *Stream) SetStreamConfig(config *SelectedStreamConfiguration) error {
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: Command=%d SessionID=%s\n", config.Control.Command, config.Control.SessionID)
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: VideoCodec=%+v\n", config.VideoCodec)
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: AudioCodec=%+v\n", config.AudioCodec)
+
 	char := s.service.GetCharacter(TypeSelectedStreamConfiguration)
 	if err := char.Write(config); err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: Write error: %v\n", err)
 		return err
 	}
 	if err := s.client.PutCharacters(char); err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: PutCharacters error: %v\n", err)
 		return err
 	}
 
-	return s.client.GetCharacter(char)
+	if err := s.client.GetCharacter(char); err != nil {
+		fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: GetCharacter error: %v\n", err)
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "[DEBUG-HK] SetStreamConfig: Response value=%v\n", char.Value)
+	return nil
 }
 
 func (s *Stream) Close() error {
