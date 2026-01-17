@@ -39,10 +39,21 @@ func (c *Client) startHDS() error {
 		return fmt.Errorf("failed to get accessory: %w", err)
 	}
 
-	// Check for HDS support
+	// Check for HDS support and read supported configurations
 	char := acc.GetCharacter(camera.TypeSupportedDataStreamTransportConfiguration)
 	if char == nil {
 		return fmt.Errorf("accessory does not support HDS")
+	}
+
+	// Read supported transport configurations
+	var supportedConfig camera.SupportedDataStreamTransportConfiguration
+	if err := char.ReadTLV8(&supportedConfig); err != nil {
+		log.Printf("[homekit] HDS: warning - failed to read supported configs: %v", err)
+	} else {
+		log.Printf("[homekit] HDS: camera supports %d transport configuration(s)", len(supportedConfig.Configs))
+		for i, cfg := range supportedConfig.Configs {
+			log.Printf("[homekit] HDS: config[%d] transport type=%d", i, cfg.TransportType)
+		}
 	}
 
 	// Setup HDS session
@@ -139,15 +150,50 @@ func (p *HDSProducer) setupHDSTransport() error {
 		if err := json.Unmarshal(resBody, &resChars); err != nil {
 			return fmt.Errorf("failed to unmarshal PUT response: %w", err)
 		}
+
+		// Check for error status in the response
 		if len(resChars.Value) > 0 {
-			char.Value = resChars.Value[0].Value
-			log.Printf("[homekit] HDS: updated char.Value from PUT response: %v", char.Value)
+			// HAP returns status field when there's an error
+			if resChars.Value[0].Status != nil {
+				// Convert status to int for logging
+				var statusCode int
+				switch s := resChars.Value[0].Status.(type) {
+				case float64:
+					statusCode = int(s)
+				case int:
+					statusCode = s
+				case int64:
+					statusCode = int(s)
+				}
+
+				if statusCode != 0 {
+					// Common HAP error codes:
+					// -70401: Communication failure
+					// -70402: Invalid signature
+					// -70404: Insufficient privileges
+					// -70405: Busy/resource unavailable
+					// -70408: Notification not supported
+					// -70409: Out of resources
+					// -70410: Operation timeout or busy
+					return fmt.Errorf("camera rejected HDS setup with status %d (possible causes: camera busy, resource in use, or unsupported configuration)", statusCode)
+				}
+			}
+
+			// Only try to read value if status is success and value exists
+			if resChars.Value[0].Value != nil {
+				char.Value = resChars.Value[0].Value
+				log.Printf("[homekit] HDS: updated char.Value from PUT response: %v", char.Value)
+			} else {
+				return fmt.Errorf("camera returned no value in response (status was successful but no data)")
+			}
+		} else {
+			return fmt.Errorf("camera returned empty response")
 		}
 	}
 
 	var res camera.SetupDataStreamTransportResponse
 	if err := char.ReadTLV8(&res); err != nil {
-		return fmt.Errorf("failed to read HDS transport response: %w", err)
+		return fmt.Errorf("failed to decode HDS transport response: %w", err)
 	}
 
 	if res.Status != 0 {
