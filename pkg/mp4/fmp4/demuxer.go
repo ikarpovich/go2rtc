@@ -339,6 +339,64 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 	if nlen < 1 || nlen > 4 {
 		nlen = 4
 	}
+	nalus, err := parseAVCCWithLen(sample, nlen)
+	if err == nil {
+		return append(nalus[:len(nalus):len(nalus)], nalus...), nil
+	}
+
+	// If parsing failed, try other length sizes as fallback.
+	for _, alt := range []int{1, 2, 4} {
+		if alt == nlen {
+			continue
+		}
+		if alt == 0 || alt > 4 {
+			continue
+		}
+		if alts, altErr := parseAVCCWithLen(sample, alt); altErr == nil {
+			return alts, nil
+		}
+	}
+
+	// If the payload contains start codes, fall back to AnnexB splitting.
+	if containsStartCode(sample) {
+		for _, nalu := range splitAnnexB(sample) {
+			nalus = append(nalus, nalu)
+		}
+		if len(nalus) > 0 {
+			return nalus, nil
+		}
+	}
+
+	return nil, err
+}
+
+func isAnnexB(b []byte) bool {
+	if len(b) < 3 {
+		return false
+	}
+	if b[0] == 0 && b[1] == 0 && b[2] == 1 {
+		return true
+	}
+	if len(b) >= 4 && b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 1 {
+		return true
+	}
+	return false
+}
+
+func containsStartCode(b []byte) bool {
+	for i := 0; i+3 < len(b); i++ {
+		if b[i] == 0 && b[i+1] == 0 && b[i+2] == 1 {
+			return true
+		}
+		if i+4 < len(b) && b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func parseAVCCWithLen(sample []byte, nlen int) ([][]byte, error) {
+	var nalus [][]byte
 	pos := 0
 	for pos+nlen <= len(sample) {
 		naluLen := 0
@@ -358,19 +416,6 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 	}
 
 	return nalus, nil
-}
-
-func isAnnexB(b []byte) bool {
-	if len(b) < 3 {
-		return false
-	}
-	if b[0] == 0 && b[1] == 0 && b[2] == 1 {
-		return true
-	}
-	if len(b) >= 4 && b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 1 {
-		return true
-	}
-	return false
 }
 
 func splitAnnexB(b []byte) [][]byte {
