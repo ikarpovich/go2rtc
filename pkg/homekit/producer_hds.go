@@ -1,10 +1,7 @@
 package homekit
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"sync/atomic"
@@ -130,76 +127,11 @@ func (p *HDSProducer) setupHDSTransport() error {
 	}
 
 	log.Printf("[homekit] HDS: wrote request to char, value=%v", char.Value)
-
-	// Send PUT request and parse response (contains updated characteristic value)
-	reqBody := hap.JSONCharacters{
-		Value: []hap.JSONCharacter{
-			{AID: 1, IID: char.IID, Value: char.Value},
-		},
-	}
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return fmt.Errorf("failed to marshal PUT request: %w", err)
-	}
-
-	putRes, err := p.client.hap.Put(hap.PathCharacteristics, hap.MimeJSON, bytes.NewReader(body))
-	if err != nil {
+	if err := p.client.hap.PutCharacters(char); err != nil {
 		return fmt.Errorf("failed to PUT HDS transport characteristic: %w", err)
 	}
-	defer putRes.Body.Close()
-
-	// Parse PUT response to get updated characteristic value
-	resBody, err := io.ReadAll(putRes.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read PUT response: %w", err)
-	}
-
-	log.Printf("[homekit] HDS: PUT response body: %s", resBody)
-
-	var resChars hap.JSONCharacters
-	if len(resBody) > 0 {
-		if err := json.Unmarshal(resBody, &resChars); err != nil {
-			return fmt.Errorf("failed to unmarshal PUT response: %w", err)
-		}
-
-		// Check for error status in the response
-		if len(resChars.Value) > 0 {
-			// HAP returns status field when there's an error
-			if resChars.Value[0].Status != nil {
-				// Convert status to int for logging
-				var statusCode int
-				switch s := resChars.Value[0].Status.(type) {
-				case float64:
-					statusCode = int(s)
-				case int:
-					statusCode = s
-				case int64:
-					statusCode = int(s)
-				}
-
-				if statusCode != 0 {
-					// Common HAP error codes:
-					// -70401: Communication failure
-					// -70402: Invalid signature
-					// -70404: Insufficient privileges
-					// -70405: Busy/resource unavailable
-					// -70408: Notification not supported
-					// -70409: Out of resources
-					// -70410: Operation timeout or busy
-					return fmt.Errorf("camera rejected HDS setup with status %d (possible causes: camera busy, resource in use, or unsupported configuration)", statusCode)
-				}
-			}
-
-			// Only try to read value if status is success and value exists
-			if resChars.Value[0].Value != nil {
-				char.Value = resChars.Value[0].Value
-				log.Printf("[homekit] HDS: updated char.Value from PUT response: %v", char.Value)
-			} else {
-				return fmt.Errorf("camera returned no value in response (status was successful but no data)")
-			}
-		} else {
-			return fmt.Errorf("camera returned empty response")
-		}
+	if err := p.client.hap.GetCharacter(char); err != nil {
+		return fmt.Errorf("failed to read HDS transport characteristic: %w", err)
 	}
 
 	var res camera.SetupDataStreamTransportResponse
