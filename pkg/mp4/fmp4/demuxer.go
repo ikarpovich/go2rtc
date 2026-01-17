@@ -2,6 +2,7 @@
 package fmp4
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"log"
@@ -22,6 +23,7 @@ type Demuxer struct {
 	trackID      uint32
 	timeScale    uint32
 	naluLen      int
+	loggedOffset bool
 	loggedSample bool
 
 	// Callback for decoded frames
@@ -236,17 +238,23 @@ func (d *Demuxer) Demux(data []byte) error {
 		return fmt.Errorf("missing trun or mdat in fragment")
 	}
 
+	sampleOffset := uint32(0)
+	if trun.DataOffset > 0 {
+		sampleOffset = d.resolveSampleOffset(trun.DataOffset, data, mdatData)
+		if !d.loggedOffset {
+			log.Printf("[fmp4] trun data offset=%d resolved=%d mdat=%d", trun.DataOffset, sampleOffset, len(mdatData))
+			d.loggedOffset = true
+		}
+	}
+
 	// Process each sample in the trun
-	return d.processSamples(trun, mdatData, decodeTime)
+	return d.processSamples(trun, mdatData, decodeTime, sampleOffset)
 }
 
 // processSamples extracts NAL units from mdat based on trun sample info
-func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint64) error {
-	offset := trun.DataOffset
-	if offset > 0 {
-		// Offset is relative to moof start, but we only have mdat
-		// Usually offset points into mdat
-		offset = 0
+func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint64, offset uint32) error {
+	if len(trun.SamplesSize) == 0 {
+		return fmt.Errorf("no sample sizes in trun")
 	}
 
 	numSamples := len(trun.SamplesSize)
@@ -298,6 +306,57 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 	}
 
 	return nil
+}
+
+func (d *Demuxer) resolveSampleOffset(dataOffset uint32, fragment []byte, mdat []byte) uint32 {
+	moofStart, mdatStart, okMoof, okMdat := findFragmentOffsets(fragment)
+	if okMoof && okMdat {
+		mdatDataStart := mdatStart + 8
+		sampleStart := moofStart + dataOffset
+		if sampleStart >= mdatDataStart {
+			rel := sampleStart - mdatDataStart
+			if rel < uint32(len(mdat)) {
+				return rel
+			}
+		}
+	}
+
+	if dataOffset < uint32(len(mdat)) {
+		return dataOffset
+	}
+	if dataOffset > 8 && dataOffset-8 < uint32(len(mdat)) {
+		return dataOffset - 8
+	}
+
+	return 0
+}
+
+func findFragmentOffsets(data []byte) (moofStart uint32, mdatStart uint32, okMoof bool, okMdat bool) {
+	var offset uint32
+	for int(offset)+8 <= len(data) {
+		size := binary.BigEndian.Uint32(data[offset:])
+		if size < 8 || int(offset)+int(size) > len(data) {
+			break
+		}
+
+		kind := string(data[offset+4 : offset+8])
+		switch kind {
+		case "moof":
+			moofStart = offset
+			okMoof = true
+		case "mdat":
+			mdatStart = offset
+			okMdat = true
+		}
+
+		if okMoof && okMdat {
+			break
+		}
+
+		offset += size
+	}
+
+	return moofStart, mdatStart, okMoof, okMdat
 }
 
 // extractNALUs extracts NAL units from a sample
