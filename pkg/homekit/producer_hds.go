@@ -130,11 +130,8 @@ func (p *HDSProducer) setupHDSTransport() error {
 	}
 
 	log.Printf("[homekit] HDS: wrote request to char, value=%v", char.Value)
-	if err := p.client.hap.PutCharacters(char); err != nil {
+	if err := p.putCharacteristicWithResponse(char); err != nil {
 		return fmt.Errorf("failed to PUT HDS transport characteristic: %w", err)
-	}
-	if err := p.getCharacteristicWithRaw(char); err != nil {
-		return fmt.Errorf("failed to read HDS transport characteristic: %w", err)
 	}
 
 	var res camera.SetupDataStreamTransportResponse
@@ -171,23 +168,70 @@ func (p *HDSProducer) setupHDSTransport() error {
 	return nil
 }
 
-func (p *HDSProducer) getCharacteristicWithRaw(char *hap.Character) error {
-	query := fmt.Sprintf("%d.%d", hap.DeviceAID, char.IID)
-	res, err := p.client.hap.Get(hap.PathCharacteristics + "?id=" + query)
+func (p *HDSProducer) putCharacteristicWithResponse(char *hap.Character) error {
+	reqBody := hap.JSONCharacters{
+		Value: []hap.JSONCharacter{
+			{AID: hap.DeviceAID, IID: char.IID, Value: char.Value},
+		},
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal PUT request: %w", err)
+	}
+
+	res, err := p.client.hap.Put(hap.PathCharacteristics, hap.MimeJSON, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
 
-	body, err := io.ReadAll(res.Body)
+	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read PUT response: %w", err)
 	}
 
-	log.Printf("[homekit] HDS: GET response body: %s", bytes.TrimSpace(body))
+	log.Printf("[homekit] HDS: PUT response body: %s", bytes.TrimSpace(resBody))
 
 	var v hap.JSONCharacters
-	if err := json.Unmarshal(body, &v); err != nil {
+	if len(resBody) > 0 {
+		if err := json.Unmarshal(resBody, &v); err != nil {
+			return fmt.Errorf("failed to unmarshal PUT response: %w", err)
+		}
+	}
+
+	if len(v.Value) > 0 && v.Value[0].Status != nil {
+		var statusCode int
+		switch s := v.Value[0].Status.(type) {
+		case float64:
+			statusCode = int(s)
+		case int:
+			statusCode = s
+		case int64:
+			statusCode = int(s)
+		}
+		if statusCode != 0 {
+			return fmt.Errorf("camera rejected HDS setup with status %d", statusCode)
+		}
+	}
+
+	if len(v.Value) > 0 && v.Value[0].Value != nil {
+		char.Value = v.Value[0].Value
+		return nil
+	}
+
+	// Fallback: try GET if response had no value
+	query := fmt.Sprintf("%d.%d", hap.DeviceAID, char.IID)
+	getRes, err := p.client.hap.Get(hap.PathCharacteristics + "?id=" + query)
+	if err != nil {
+		return fmt.Errorf("no value in PUT response and GET failed: %w", err)
+	}
+	defer getRes.Body.Close()
+	getBody, err := io.ReadAll(getRes.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read GET response: %w", err)
+	}
+	log.Printf("[homekit] HDS: GET response body: %s", bytes.TrimSpace(getBody))
+	if err := json.Unmarshal(getBody, &v); err != nil {
 		return fmt.Errorf("failed to unmarshal GET response: %w", err)
 	}
 	if len(v.Value) == 0 {
