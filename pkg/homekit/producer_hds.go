@@ -303,6 +303,7 @@ func (p *HDSProducer) processMessages() error {
 		if err != nil {
 			return fmt.Errorf("failed to read HDS message: %w", err)
 		}
+		log.Printf("[homekit] HDS: msg type=%d protocol=%s topic=%s id=%d status=%d", msg.Type, msg.Protocol, msg.Topic, msg.ID, msg.Status)
 
 		// Handle different message types
 		switch {
