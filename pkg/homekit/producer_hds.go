@@ -321,6 +321,7 @@ func (p *HDSProducer) processMessages() error {
 
 		case msg.IsResponse() && msg.Protocol == hds.ProtocolDataSend && msg.Topic == hds.TopicOpen:
 			if msg.Status != 0 {
+				log.Printf("[homekit] HDS: dataSend.open error body=%v", msg.Body)
 				return fmt.Errorf("HDS dataSend.open failed with status %d", msg.Status)
 			}
 			streamID, _ := msg.Body["streamId"].(int64)
