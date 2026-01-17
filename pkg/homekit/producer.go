@@ -177,14 +177,26 @@ func (c *Client) startSRTP() error {
 	deadline := time.NewTimer(core.ConnDeadline)
 
 	if videoTrack != nil {
+		seen := false
 		c.videoSession.OnReadRTP = func(packet *rtp.Packet) {
+			if !seen {
+				seen = true
+				log.Printf("[homekit] SRTP video: first packet ssrc=%d seq=%d ts=%d size=%d",
+					packet.SSRC, packet.SequenceNumber, packet.Timestamp, len(packet.Payload))
+			}
 			deadline.Reset(core.ConnDeadline)
 			videoTrack.WriteRTP(packet)
 			c.Recv += len(packet.Payload)
 		}
 
 		if audioTrack != nil {
+			aseen := false
 			c.audioSession.OnReadRTP = func(packet *rtp.Packet) {
+				if !aseen {
+					aseen = true
+					log.Printf("[homekit] SRTP audio: first packet ssrc=%d seq=%d ts=%d size=%d",
+						packet.SSRC, packet.SequenceNumber, packet.Timestamp, len(packet.Payload))
+				}
 				audioTrack.WriteRTP(packet)
 				c.Recv += len(packet.Payload)
 			}

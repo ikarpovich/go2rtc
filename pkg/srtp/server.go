@@ -2,6 +2,7 @@ package srtp
 
 import (
 	"encoding/binary"
+	"log"
 	"net"
 	"strconv"
 	"sync"
@@ -11,6 +12,7 @@ type Server struct {
 	address  string
 	conn     net.PacketConn
 	sessions map[uint32]*Session
+	unknown  map[uint32]struct{}
 	mu       sync.Mutex
 }
 
@@ -18,6 +20,7 @@ func NewServer(address string) *Server {
 	return &Server{
 		address:  address,
 		sessions: map[uint32]*Session{},
+		unknown:  map[uint32]struct{}{},
 	}
 }
 
@@ -89,6 +92,13 @@ func (s *Server) handle() error {
 			ssrc := binary.BigEndian.Uint32(b[8:])
 			if session := s.GetSession(ssrc); session != nil {
 				session.ReadRTP(b[:n])
+			} else {
+				s.mu.Lock()
+				if _, ok := s.unknown[ssrc]; !ok {
+					s.unknown[ssrc] = struct{}{}
+					log.Printf("[srtp] unknown RTP SSRC=%d", ssrc)
+				}
+				s.mu.Unlock()
 			}
 
 		case 200, 201, 202, 203, 204, 205, 206, 207:
@@ -96,6 +106,13 @@ func (s *Server) handle() error {
 			ssrc := binary.BigEndian.Uint32(b[4:])
 			if session := s.GetSession(ssrc); session != nil {
 				session.ReadRTCP(b[:n])
+			} else {
+				s.mu.Lock()
+				if _, ok := s.unknown[ssrc]; !ok {
+					s.unknown[ssrc] = struct{}{}
+					log.Printf("[srtp] unknown RTCP SSRC=%d", ssrc)
+				}
+				s.mu.Unlock()
 			}
 		}
 	}
