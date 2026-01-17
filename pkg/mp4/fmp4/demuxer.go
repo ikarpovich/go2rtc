@@ -25,6 +25,8 @@ type Demuxer struct {
 	naluLen      int
 	loggedOffset bool
 	loggedSample bool
+	loggedTrack  bool
+	loggedTrun   bool
 
 	// Callback for decoded frames
 	onFrame func(nalus [][]byte, keyframe bool, pts, dts uint64)
@@ -226,9 +228,12 @@ func (d *Demuxer) Demux(data []byte) error {
 			currentTrackID = a.TrackID
 			currentDefaultSampleSize = a.SampleSize
 			// Track ID from init may not align with fragment track IDs for some cameras.
-			// If it differs, prefer the fragment track ID instead of failing.
-			if d.trackID == 0 || a.TrackID != d.trackID {
+			// If it differs, prefer the init value unless we don't have one.
+			if d.trackID == 0 {
 				d.trackID = a.TrackID
+			} else if a.TrackID != d.trackID && !d.loggedTrack {
+				log.Printf("[fmp4] track id mismatch init=%d fragment=%d", d.trackID, a.TrackID)
+				d.loggedTrack = true
 			}
 			if a.TrackID == d.trackID && a.SampleSize != 0 {
 				videoDefaultSampleSize = a.SampleSize
@@ -249,6 +254,26 @@ func (d *Demuxer) Demux(data []byte) error {
 
 	if trun == nil || mdatData == nil {
 		return fmt.Errorf("missing trun or mdat in fragment")
+	}
+
+	if !d.loggedTrun {
+		var total uint64
+		var max uint32
+		limit := len(trun.SamplesSize)
+		if limit > 8 {
+			limit = 8
+		}
+		for _, size := range trun.SamplesSize {
+			total += uint64(size)
+			if size > max {
+				max = size
+			}
+		}
+		log.Printf("[fmp4] trun samples=%d total=%d max=%d mdat=%d", len(trun.SamplesSize), total, max, len(mdatData))
+		if limit > 0 {
+			log.Printf("[fmp4] trun sizes head=%v", trun.SamplesSize[:limit])
+		}
+		d.loggedTrun = true
 	}
 
 	if trun != nil && len(trun.SamplesSize) == 0 && trun.SamplesCount > 0 && videoDefaultSampleSize != 0 {
