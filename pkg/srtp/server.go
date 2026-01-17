@@ -44,7 +44,19 @@ func (s *Server) AddSession(session *Session) {
 
 	if len(s.sessions) == 0 {
 		var err error
-		if s.conn, err = net.ListenPacket("udp", s.address); err != nil {
+		network := "udp"
+		if host, _, splitErr := net.SplitHostPort(s.address); splitErr == nil {
+			if host == "" {
+				network = "udp4"
+			} else if ip := net.ParseIP(host); ip != nil {
+				if ip.To4() != nil {
+					network = "udp4"
+				} else {
+					network = "udp6"
+				}
+			}
+		}
+		if s.conn, err = net.ListenPacket(network, s.address); err != nil {
 			return
 		}
 		go s.handle()
