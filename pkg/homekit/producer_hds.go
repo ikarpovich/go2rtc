@@ -371,6 +371,8 @@ func (p *HDSProducer) processMessages() error {
 
 				meta := hds.ParseDataSendMetadata(metadata)
 				if !p.loggedData {
+					log.Printf("[homekit] HDS: first metadata keys=%v", mapKeys(metadata))
+					log.Printf("[homekit] HDS: first metadata=%v", metadata)
 					log.Printf("[homekit] HDS: first meta type=%d seq=%d chunk=%d last=%v total=%d data=%d",
 						meta.DataType, meta.DataSequenceNumber, meta.DataChunkSequenceNumber,
 						meta.IsLastDataChunk, meta.DataTotalSize, len(data),
