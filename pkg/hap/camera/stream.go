@@ -2,6 +2,7 @@ package camera
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/hap"
@@ -135,6 +136,9 @@ func (s *Stream) ExchangeEndpoints(videoSession, audioSession *srtp.Session) err
 	}
 	if err := char.ReadTLV8(&res); err != nil {
 		return err
+	}
+	if res.Status != 0 {
+		return fmt.Errorf("hap: SetupEndpoints error status=%d", res.Status)
 	}
 
 	videoSession.Remote = &srtp.Endpoint{

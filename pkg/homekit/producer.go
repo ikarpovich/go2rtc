@@ -136,6 +136,14 @@ func (c *Client) Start() error {
 
 func (c *Client) startSRTP() error {
 	log.Printf("[homekit] using SRTP producer mode")
+	if acc, err := c.hap.GetFirstAccessory(); err == nil {
+		if char := acc.GetCharacter(camera.TypeSupportedRTPConfiguration); char != nil {
+			var rtp camera.SupportedRTPConfiguration
+			if err := char.ReadTLV8(&rtp); err == nil {
+				log.Printf("[homekit] SRTP supported crypto: %v", rtp.SRTPCryptoType)
+			}
+		}
+	}
 	videoTrack := c.trackByKind(core.KindVideo)
 	videoCodec := selectVideoConfig(videoTrack, c.videoConfig.Codecs, c.MaxWidth, c.MaxHeight)
 	if videoCodec == nil {
