@@ -28,6 +28,7 @@ type HDSProducer struct {
 	videoTrack *core.Receiver
 
 	requestID atomic.Int64
+	helloID   int64
 }
 
 // startHDS initiates HDS streaming mode
@@ -78,7 +79,7 @@ func (c *Client) startHDS() error {
 		return fmt.Errorf("failed to setup HDS transport: %w", err)
 	}
 
-	// Send hello and wait for the accessory hello before requesting a stream.
+	// Send hello and wait for the response before requesting a stream.
 	if err := producer.sendHello(); err != nil {
 		return fmt.Errorf("failed to send hello: %w", err)
 	}
@@ -255,11 +256,13 @@ func (p *HDSProducer) putCharacteristicWithResponse(char *hap.Character) error {
 
 // sendHello sends the initial hello message
 func (p *HDSProducer) sendHello() error {
-	log.Printf("[homekit] HDS: sending control.hello")
+	id := p.requestID.Add(1)
+	p.helloID = id
+	log.Printf("[homekit] HDS: sending control.hello (id=%d)", id)
 	body := map[string]any{
 		"version": int64(1),
 	}
-	return p.hdsConn.SendEvent(hds.ProtocolControl, hds.TopicHello, body)
+	return p.hdsConn.SendRequest(hds.ProtocolControl, hds.TopicHello, id, body)
 }
 
 // requestVideoStream requests a video stream via dataSend.open
@@ -303,9 +306,9 @@ func (p *HDSProducer) processMessages() error {
 
 		// Handle different message types
 		switch {
-		case msg.IsEvent() && msg.Protocol == hds.ProtocolControl && msg.Topic == hds.TopicHello:
-			log.Printf("[homekit] HDS: received control.hello")
-			if !streamRequested {
+		case msg.IsResponse() && msg.Protocol == hds.ProtocolControl && msg.Topic == hds.TopicHello:
+			log.Printf("[homekit] HDS: received control.hello response (id=%d, status=%d)", msg.ID, msg.Status)
+			if msg.ID == p.helloID && !streamRequested {
 				if err := p.requestVideoStream(); err != nil {
 					return fmt.Errorf("failed to request video stream: %w", err)
 				}
@@ -313,7 +316,9 @@ func (p *HDSProducer) processMessages() error {
 			}
 
 		case msg.IsResponse() && msg.Protocol == hds.ProtocolDataSend && msg.Topic == hds.TopicOpen:
-			// Stream opened successfully
+			if msg.Status != 0 {
+				return fmt.Errorf("HDS dataSend.open failed with status %d", msg.Status)
+			}
 			streamID, _ := msg.Body["streamId"].(int64)
 			log.Printf("[homekit] HDS: stream opened (streamId=%d)", streamID)
 
