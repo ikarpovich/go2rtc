@@ -29,6 +29,8 @@ type HDSProducer struct {
 
 	requestID atomic.Int64
 	helloID   int64
+
+	loggedData bool
 }
 
 // startHDS initiates HDS streaming mode
@@ -285,7 +287,9 @@ func (p *HDSProducer) requestVideoStream() error {
 // processMessages reads and processes HDS messages
 func (p *HDSProducer) processMessages() error {
 	var fragmentBuffer []byte
+	var initBuffer []byte
 	var currentSeq int64 = -1
+	var initSeq int64 = -1
 	var streamRequested bool
 
 	deadline := time.NewTimer(core.ConnDeadline)
@@ -333,7 +337,14 @@ func (p *HDSProducer) processMessages() error {
 			// Extract video packets
 			packets, ok := msg.Body["packets"].([]any)
 			if !ok {
+				if !p.loggedData {
+					log.Printf("[homekit] HDS: data event without packets, body keys=%v", mapKeys(msg.Body))
+					p.loggedData = true
+				}
 				continue
+			}
+			if !p.loggedData {
+				log.Printf("[homekit] HDS: data event packets=%d", len(packets))
 			}
 
 			for _, pkt := range packets {
@@ -344,25 +355,47 @@ func (p *HDSProducer) processMessages() error {
 
 				data, ok := packet["data"].([]byte)
 				if !ok {
+					if !p.loggedData {
+						log.Printf("[homekit] HDS: packet data type=%T", packet["data"])
+					}
 					continue
 				}
 
 				metadata, ok := packet["metadata"].(map[string]any)
 				if !ok {
+					if !p.loggedData {
+						log.Printf("[homekit] HDS: packet metadata type=%T", packet["metadata"])
+					}
 					continue
 				}
 
 				meta := hds.ParseDataSendMetadata(metadata)
+				if !p.loggedData {
+					log.Printf("[homekit] HDS: first meta type=%d seq=%d chunk=%d last=%v total=%d data=%d",
+						meta.DataType, meta.DataSequenceNumber, meta.DataChunkSequenceNumber,
+						meta.IsLastDataChunk, meta.DataTotalSize, len(data),
+					)
+					p.loggedData = true
+				}
 
 				// Handle initialization segment
 				if meta.DataType == hds.DataTypeMediaInit {
+					if meta.DataSequenceNumber != initSeq {
+						initSeq = meta.DataSequenceNumber
+						initBuffer = make([]byte, 0, int(meta.DataTotalSize))
+						log.Printf("[homekit] HDS: init seq=%d total=%d bytes", initSeq, meta.DataTotalSize)
+					}
+
+					initBuffer = append(initBuffer, data...)
+
 					if meta.IsLastDataChunk {
-						log.Printf("[homekit] HDS: received init segment (%d bytes)", len(data))
-						if err := p.demuxer.SetInit(data); err != nil {
+						log.Printf("[homekit] HDS: received init segment (%d bytes)", len(initBuffer))
+						if err := p.demuxer.SetInit(initBuffer); err != nil {
 							return fmt.Errorf("failed to set init segment: %w", err)
 						}
 						log.Printf("[homekit] HDS: codec=%s, SPS=%d bytes, PPS=%d bytes",
 							p.demuxer.VideoCodec, len(p.demuxer.SPS), len(p.demuxer.PPS))
+						initBuffer = nil
 					}
 					continue
 				}
@@ -422,4 +455,12 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 
 	p.videoTrack.WriteRTP(pkt)
 	p.client.Recv += len(pkt.Payload)
+}
+
+func mapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
