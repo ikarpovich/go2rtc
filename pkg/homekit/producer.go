@@ -135,6 +135,7 @@ func (c *Client) Start() error {
 }
 
 func (c *Client) startSRTP() error {
+	log.Printf("[homekit] using SRTP producer mode")
 	videoTrack := c.trackByKind(core.KindVideo)
 	videoCodec := trackToVideo(videoTrack, &c.videoConfig.Codecs[0], c.MaxWidth, c.MaxHeight)
 
