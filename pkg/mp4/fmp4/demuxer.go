@@ -216,11 +216,18 @@ func (d *Demuxer) Demux(data []byte) error {
 	}
 
 	var decodeTime uint64
+	type trunCandidate struct {
+		trun              *iso.AtomTrun
+		trackID           uint32
+		defaultSampleSize uint32
+	}
+
 	var trun *iso.AtomTrun
 	var mdatData []byte
 	var currentTrackID uint32
 	var currentDefaultSampleSize uint32
 	var videoDefaultSampleSize uint32
+	var candidates []trunCandidate
 
 	for _, atom := range atoms {
 		switch a := atom.(type) {
@@ -231,9 +238,6 @@ func (d *Demuxer) Demux(data []byte) error {
 			// If it differs, prefer the init value unless we don't have one.
 			if d.trackID == 0 {
 				d.trackID = a.TrackID
-			} else if a.TrackID != d.trackID && !d.loggedTrack {
-				log.Printf("[fmp4] track id mismatch init=%d fragment=%d", d.trackID, a.TrackID)
-				d.loggedTrack = true
 			}
 			if a.TrackID == d.trackID && a.SampleSize != 0 {
 				videoDefaultSampleSize = a.SampleSize
@@ -241,19 +245,65 @@ func (d *Demuxer) Demux(data []byte) error {
 		case *iso.AtomTfdt:
 			decodeTime = a.DecodeTime
 		case *iso.AtomTrun:
-			if currentTrackID == 0 || currentTrackID == d.trackID {
-				trun = a
-				if currentTrackID == d.trackID && currentDefaultSampleSize != 0 {
-					videoDefaultSampleSize = currentDefaultSampleSize
-				}
-			}
+			candidates = append(candidates, trunCandidate{
+				trun:              a,
+				trackID:           currentTrackID,
+				defaultSampleSize: currentDefaultSampleSize,
+			})
 		case *iso.AtomMdat:
 			mdatData = a.Data
 		}
 	}
 
-	if trun == nil || mdatData == nil {
+	if len(candidates) == 0 || mdatData == nil {
 		return fmt.Errorf("missing trun or mdat in fragment")
+	}
+
+	best := trunCandidate{}
+	bestSize := uint64(0)
+	for _, cand := range candidates {
+		size := estimateTrunBytes(cand.trun, cand.defaultSampleSize)
+		if size > bestSize {
+			best = cand
+			bestSize = size
+		}
+	}
+
+	if d.trackID != 0 {
+		var match trunCandidate
+		var matchSize uint64
+		for _, cand := range candidates {
+			if cand.trackID != d.trackID {
+				continue
+			}
+			size := estimateTrunBytes(cand.trun, cand.defaultSampleSize)
+			if size > matchSize {
+				match = cand
+				matchSize = size
+			}
+		}
+
+		// If the matching track looks wrong, fall back to the largest sample set.
+		if match.trun != nil && bestSize <= matchSize*2 {
+			trun = match.trun
+			videoDefaultSampleSize = match.defaultSampleSize
+		} else {
+			if match.trun != nil && !d.loggedTrack {
+				log.Printf("[fmp4] track id mismatch init=%d fragment=%d", d.trackID, best.trackID)
+				d.loggedTrack = true
+			}
+			trun = best.trun
+			videoDefaultSampleSize = best.defaultSampleSize
+			if best.trackID != 0 && best.trackID != d.trackID {
+				d.trackID = best.trackID
+			}
+		}
+	} else {
+		trun = best.trun
+		videoDefaultSampleSize = best.defaultSampleSize
+		if best.trackID != 0 {
+			d.trackID = best.trackID
+		}
 	}
 
 	if !d.loggedTrun {
@@ -360,6 +410,23 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 	}
 
 	return nil
+}
+
+func estimateTrunBytes(trun *iso.AtomTrun, defaultSampleSize uint32) uint64 {
+	if trun == nil {
+		return 0
+	}
+	if len(trun.SamplesSize) > 0 {
+		var total uint64
+		for _, size := range trun.SamplesSize {
+			total += uint64(size)
+		}
+		return total
+	}
+	if trun.SamplesCount > 0 && defaultSampleSize > 0 {
+		return uint64(trun.SamplesCount) * uint64(defaultSampleSize)
+	}
+	return 0
 }
 
 func (d *Demuxer) resolveSampleOffset(dataOffset uint32, fragment []byte, mdat []byte) uint32 {
