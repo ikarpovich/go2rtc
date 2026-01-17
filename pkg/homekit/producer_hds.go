@@ -2,6 +2,7 @@ package homekit
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"sync/atomic"
 	"time"
@@ -28,6 +29,8 @@ type HDSProducer struct {
 
 // startHDS initiates HDS streaming mode
 func (c *Client) startHDS() error {
+	log.Printf("[homekit] using HDS producer mode")
+
 	acc, err := c.hap.GetFirstAccessory()
 	if err != nil {
 		return fmt.Errorf("failed to get accessory: %w", err)
@@ -49,6 +52,8 @@ func (c *Client) startHDS() error {
 	if producer.videoTrack == nil {
 		return fmt.Errorf("no video track configured")
 	}
+
+	log.Printf("[homekit] HDS: video track codec=%s", producer.videoTrack.Codec.Name)
 
 	// Setup fMP4 demuxer
 	producer.demuxer = fmp4.NewDemuxer()
@@ -111,6 +116,8 @@ func (p *HDSProducer) setupHDSTransport() error {
 	port := res.TransportTypeSessionParameters.TCPListeningPort
 	addr := fmt.Sprintf("%s:%d", host, port)
 
+	log.Printf("[homekit] HDS: connecting to %s", addr)
+
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to connect to HDS port: %w", err)
@@ -125,11 +132,13 @@ func (p *HDSProducer) setupHDSTransport() error {
 		return fmt.Errorf("failed to create HDS connection: %w", err)
 	}
 
+	log.Printf("[homekit] HDS: transport established")
 	return nil
 }
 
 // sendHello sends the initial hello message
 func (p *HDSProducer) sendHello() error {
+	log.Printf("[homekit] HDS: sending control.hello")
 	body := map[string]any{
 		"version": int64(1),
 	}
@@ -139,6 +148,8 @@ func (p *HDSProducer) sendHello() error {
 // requestVideoStream requests a video stream via dataSend.open
 func (p *HDSProducer) requestVideoStream() error {
 	id := p.requestID.Add(1)
+
+	log.Printf("[homekit] HDS: requesting video stream (id=%d)", id)
 
 	body := map[string]any{
 		"target": "controller",
@@ -176,7 +187,8 @@ func (p *HDSProducer) processMessages() error {
 		switch {
 		case msg.IsResponse() && msg.Protocol == hds.ProtocolDataSend && msg.Topic == hds.TopicOpen:
 			// Stream opened successfully
-			_ = msg.Body["streamId"] // streamId available if needed
+			streamID, _ := msg.Body["streamId"].(int64)
+			log.Printf("[homekit] HDS: stream opened (streamId=%d)", streamID)
 
 		case msg.IsEvent() && msg.Protocol == hds.ProtocolDataSend && msg.Topic == hds.TopicData:
 			deadline.Reset(core.ConnDeadline)
@@ -208,9 +220,12 @@ func (p *HDSProducer) processMessages() error {
 				// Handle initialization segment
 				if meta.DataType == hds.DataTypeMediaInit {
 					if meta.IsLastDataChunk {
+						log.Printf("[homekit] HDS: received init segment (%d bytes)", len(data))
 						if err := p.demuxer.SetInit(data); err != nil {
 							return fmt.Errorf("failed to set init segment: %w", err)
 						}
+						log.Printf("[homekit] HDS: codec=%s, SPS=%d bytes, PPS=%d bytes",
+							p.demuxer.VideoCodec, len(p.demuxer.SPS), len(p.demuxer.PPS))
 					}
 					continue
 				}
@@ -221,6 +236,8 @@ func (p *HDSProducer) processMessages() error {
 					if meta.DataSequenceNumber != currentSeq {
 						currentSeq = meta.DataSequenceNumber
 						fragmentBuffer = make([]byte, 0, int(meta.DataTotalSize))
+						log.Printf("[homekit] HDS: fragment seq=%d, total=%d bytes",
+							currentSeq, meta.DataTotalSize)
 					}
 
 					// Accumulate fragment data
@@ -228,8 +245,10 @@ func (p *HDSProducer) processMessages() error {
 
 					// Process complete fragment
 					if meta.IsLastDataChunk {
+						log.Printf("[homekit] HDS: demuxing fragment seq=%d (%d bytes)",
+							currentSeq, len(fragmentBuffer))
 						if err := p.demuxer.Demux(fragmentBuffer); err != nil {
-							// Log error but continue
+							log.Printf("[homekit] HDS: demux error: %v", err)
 							continue
 						}
 						fragmentBuffer = nil
@@ -238,6 +257,7 @@ func (p *HDSProducer) processMessages() error {
 			}
 
 		case msg.IsEvent() && msg.Protocol == hds.ProtocolDataSend && msg.Topic == hds.TopicClose:
+			log.Printf("[homekit] HDS: stream closed by accessory")
 			return fmt.Errorf("stream closed by accessory")
 		}
 	}
@@ -258,6 +278,11 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 		Header:  rtp.Header{Timestamp: uint32(pts)},
 		Payload: payload,
 	}
+
+	if keyframe {
+		log.Printf("[homekit] HDS: keyframe nalus=%d, pts=%d, size=%d bytes", len(nalus), pts, len(payload))
+	}
+
 	p.videoTrack.WriteRTP(pkt)
 	p.client.Recv += len(pkt.Payload)
 }
