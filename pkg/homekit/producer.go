@@ -3,6 +3,7 @@ package homekit
 import (
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"net"
 	"time"
@@ -121,7 +122,11 @@ func (c *Client) Start() error {
 	if err == nil {
 		if char := acc.GetCharacter(camera.TypeSupportedDataStreamTransportConfiguration); char != nil {
 			// Camera supports HDS - use HDS streaming
-			return c.startHDS()
+			if err := c.startHDS(); err == nil {
+				return nil
+			} else {
+				log.Printf("[homekit] HDS failed, falling back to SRTP: %v", err)
+			}
 		}
 	}
 
