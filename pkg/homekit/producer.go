@@ -33,6 +33,8 @@ type Client struct {
 	MaxWidth  int `json:"-"`
 	MaxHeight int `json:"-"`
 	Bitrate   int `json:"-"` // in bits/s
+
+	SRTPCryptoSuite byte `json:"-"`
 }
 
 func Dial(rawURL string, server *srtp.Server) (*Client, error) {
@@ -141,6 +143,17 @@ func (c *Client) startSRTP() error {
 			var rtp camera.SupportedRTPConfiguration
 			if err := char.ReadTLV8(&rtp); err == nil {
 				log.Printf("[homekit] SRTP supported crypto: %v", rtp.SRTPCryptoType)
+				if c.SRTPCryptoSuite == 0 {
+					c.SRTPCryptoSuite = camera.CryptoAES_CM_128_HMAC_SHA1_80
+					if !core.Contains(rtp.SRTPCryptoType, c.SRTPCryptoSuite) {
+						if core.Contains(rtp.SRTPCryptoType, camera.CryptoAES_CM_256_HMAC_SHA1_80) {
+							c.SRTPCryptoSuite = camera.CryptoAES_CM_256_HMAC_SHA1_80
+						} else if core.Contains(rtp.SRTPCryptoType, camera.CryptoDisabled) {
+							c.SRTPCryptoSuite = camera.CryptoDisabled
+						}
+					}
+				}
+				log.Printf("[homekit] SRTP selected crypto: %d", c.SRTPCryptoSuite)
 			}
 		}
 	}
@@ -168,6 +181,14 @@ func (c *Client) startSRTP() error {
 
 	c.videoSession = &srtp.Session{Local: c.srtpEndpoint()}
 	c.audioSession = &srtp.Session{Local: c.srtpEndpoint()}
+	c.videoSession.CryptoSuite = c.SRTPCryptoSuite
+	c.audioSession.CryptoSuite = c.SRTPCryptoSuite
+	if c.SRTPCryptoSuite == camera.CryptoDisabled {
+		c.videoSession.Local.MasterKey = nil
+		c.videoSession.Local.MasterSalt = nil
+		c.audioSession.Local.MasterKey = nil
+		c.audioSession.Local.MasterSalt = nil
+	}
 
 	var err error
 	c.stream, err = camera.NewStream(c.hap, videoCodec, audioCodec, c.videoSession, c.audioSession, c.Bitrate)

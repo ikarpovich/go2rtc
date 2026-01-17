@@ -140,6 +140,14 @@ func streamHandler(rawURL string) (core.Producer, error) {
 		client.MaxWidth = core.Atoi(query.Get("maxwidth"))
 		client.MaxHeight = core.Atoi(query.Get("maxheight"))
 		client.Bitrate = parseBitrate(query.Get("bitrate"))
+		switch strings.ToLower(query.Get("srtp")) {
+		case "none", "disabled", "off":
+			client.SRTPCryptoSuite = camera.CryptoDisabled
+		case "aes256":
+			client.SRTPCryptoSuite = camera.CryptoAES_CM_256_HMAC_SHA1_80
+		case "aes128":
+			client.SRTPCryptoSuite = camera.CryptoAES_CM_128_HMAC_SHA1_80
+		}
 	}
 
 	return client, err

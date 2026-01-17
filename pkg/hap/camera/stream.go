@@ -113,10 +113,12 @@ func (s *Stream) ExchangeEndpoints(videoSession, audioSession *srtp.Session) err
 			AudioRTPPort: audioSession.Local.Port,
 		},
 		VideoCrypto: SRTPCryptoSuite{
+			CryptoSuite: videoSession.CryptoSuite,
 			MasterKey:  string(videoSession.Local.MasterKey),
 			MasterSalt: string(videoSession.Local.MasterSalt),
 		},
 		AudioCrypto: SRTPCryptoSuite{
+			CryptoSuite: audioSession.CryptoSuite,
 			MasterKey:  string(audioSession.Local.MasterKey),
 			MasterSalt: string(audioSession.Local.MasterSalt),
 		},

@@ -23,6 +23,8 @@ type Session struct {
 	PayloadType  uint8
 	RTCPInterval time.Duration
 
+	CryptoSuite byte
+
 	senderRTCP rtcp.SenderReport
 	senderTime time.Time
 }
@@ -40,6 +42,10 @@ type Endpoint struct {
 
 func (e *Endpoint) init() (err error) {
 	e.addr = &net.UDPAddr{IP: net.ParseIP(e.Addr), Port: int(e.Port)}
+	if len(e.MasterKey) == 0 && len(e.MasterSalt) == 0 {
+		e.srtp = nil
+		return nil
+	}
 	e.srtp, err = srtp.CreateContext(e.MasterKey, e.MasterSalt, profile(e.MasterKey))
 	return
 }
@@ -70,7 +76,14 @@ func (s *Session) init() error {
 
 func (s *Session) WriteRTP(packet *rtp.Packet) (int, error) {
 	if s.Local.srtp == nil {
-		return 0, nil // before init call
+		if s.Local.addr == nil {
+			return 0, nil // before init call
+		}
+		b, err := packet.Marshal()
+		if err != nil {
+			return 0, err
+		}
+		return s.conn.WriteTo(b, s.Remote.addr)
 	}
 
 	if now := time.Now(); now.After(s.senderTime) {
@@ -112,9 +125,11 @@ func (s *Session) WriteRTCP(packet rtcp.Packet) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	b, err = s.Local.srtp.EncryptRTCP(nil, b, nil)
-	if err != nil {
-		return 0, err
+	if s.Local.srtp != nil {
+		b, err = s.Local.srtp.EncryptRTCP(nil, b, nil)
+		if err != nil {
+			return 0, err
+		}
 	}
 	return s.conn.WriteTo(b, s.Remote.addr)
 }
@@ -122,12 +137,15 @@ func (s *Session) WriteRTCP(packet rtcp.Packet) (int, error) {
 func (s *Session) ReadRTP(b []byte) {
 	packet := &rtp.Packet{}
 
-	b, err := s.Remote.srtp.DecryptRTP(nil, b, &packet.Header)
-	if err != nil {
-		return
+	if s.Remote.srtp != nil {
+		var err error
+		b, err = s.Remote.srtp.DecryptRTP(nil, b, &packet.Header)
+		if err != nil {
+			return
+		}
 	}
 
-	if err = packet.Unmarshal(b); err != nil {
+	if err := packet.Unmarshal(b); err != nil {
 		return
 	}
 
@@ -138,8 +156,13 @@ func (s *Session) ReadRTP(b []byte) {
 
 func (s *Session) ReadRTCP(b []byte) {
 	header := rtcp.Header{}
-	b, err := s.Remote.srtp.DecryptRTCP(nil, b, &header)
-	if err != nil {
+	if s.Remote.srtp != nil {
+		var err error
+		b, err = s.Remote.srtp.DecryptRTCP(nil, b, &header)
+		if err != nil {
+			return
+		}
+	} else if err := header.Unmarshal(b); err != nil {
 		return
 	}
 
