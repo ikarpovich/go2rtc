@@ -210,9 +210,10 @@ func (d *Demuxer) Demux(data []byte) error {
 	for _, atom := range atoms {
 		switch a := atom.(type) {
 		case *iso.AtomTfhd:
-			// Verify this fragment is for our track
-			if a.TrackID != d.trackID {
-				return fmt.Errorf("track ID mismatch: expected %d, got %d", d.trackID, a.TrackID)
+			// Track ID from init may not align with fragment track IDs for some cameras.
+			// If it differs, prefer the fragment track ID instead of failing.
+			if d.trackID == 0 || a.TrackID != d.trackID {
+				d.trackID = a.TrackID
 			}
 		case *iso.AtomTfdt:
 			decodeTime = a.DecodeTime
