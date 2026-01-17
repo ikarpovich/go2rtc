@@ -105,37 +105,43 @@ func (p *HDSProducer) setupHDSTransport() error {
 	}
 
 	// Try to read current state of the characteristic
+	hasSession := false
 	log.Printf("[homekit] HDS: current char.Value: %v", char.Value)
 	if char.Value != nil {
 		var currentState camera.SetupDataStreamTransportResponse
 		if err := char.ReadTLV8(&currentState); err == nil {
 			log.Printf("[homekit] HDS: detected existing session - Status=%d, Port=%d",
 				currentState.Status, currentState.TransportTypeSessionParameters.TCPListeningPort)
+			if currentState.Status == 0 && currentState.TransportTypeSessionParameters.TCPListeningPort != 0 {
+				hasSession = true
+			}
 		}
 	}
 
 	// Check if there's an existing session that needs to be closed
 	// Try to end any existing session with SessionCommandEnd (0)
-	closeReq := camera.SetupDataStreamTransportRequest{
-		SessionCommandType: 0, // End/Close (not suspend!)
-		TransportType:      0, // HDS
-		ControllerKeySalt:  "", // Empty for close
-	}
-	if err := char.Write(&closeReq); err == nil {
-		// Try to send the close request, ignore errors
-		reqBody := hap.JSONCharacters{
-			Value: []hap.JSONCharacter{
-				{AID: 1, IID: char.IID, Value: char.Value},
-			},
+	if hasSession {
+		closeReq := camera.SetupDataStreamTransportRequest{
+			SessionCommandType: 0, // End/Close (not suspend!)
+			TransportType:      0, // HDS
+			ControllerKeySalt:  "", // Empty for close
 		}
-		if body, err := json.Marshal(reqBody); err == nil {
-			if res, err := p.client.hap.Put(hap.PathCharacteristics, hap.MimeJSON, bytes.NewReader(body)); err == nil {
-				_, _ = io.Copy(io.Discard, res.Body)
-				_ = res.Body.Close()
+		if err := char.Write(&closeReq); err == nil {
+			// Try to send the close request, ignore errors
+			reqBody := hap.JSONCharacters{
+				Value: []hap.JSONCharacter{
+					{AID: 1, IID: char.IID, Value: char.Value},
+				},
 			}
-			log.Printf("[homekit] HDS: sent close request to clear any existing session")
-			// Small delay to let camera process the close
-			time.Sleep(100 * time.Millisecond)
+			if body, err := json.Marshal(reqBody); err == nil {
+				if res, err := p.client.hap.Put(hap.PathCharacteristics, hap.MimeJSON, bytes.NewReader(body)); err == nil {
+					_, _ = io.Copy(io.Discard, res.Body)
+					_ = res.Body.Close()
+				}
+				log.Printf("[homekit] HDS: sent close request to clear existing session")
+				// Small delay to let camera process the close
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
 	}
 
