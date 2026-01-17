@@ -13,6 +13,7 @@ type Server struct {
 	conn     net.PacketConn
 	sessions map[uint32]*Session
 	unknown  map[uint32]struct{}
+	seenAny  bool
 	mu       sync.Mutex
 }
 
@@ -90,7 +91,7 @@ func (s *Server) GetSession(ssrc uint32) (session *Session) {
 func (s *Server) handle() error {
 	b := make([]byte, 2048)
 	for {
-		n, _, err := s.conn.ReadFrom(b)
+		n, addr, err := s.conn.ReadFrom(b)
 		if err != nil {
 			return err
 		}
@@ -98,7 +99,15 @@ func (s *Server) handle() error {
 		// Multiplexing RTP Data and Control Packets on a Single Port
 		// https://datatracker.ietf.org/doc/html/rfc5761
 
-		switch packetType := b[1]; packetType {
+		packetType := b[1]
+		s.mu.Lock()
+		if !s.seenAny {
+			s.seenAny = true
+			log.Printf("[srtp] recv packet type=%d from=%v size=%d", packetType, addr, n)
+		}
+		s.mu.Unlock()
+
+		switch packetType {
 		case 99, 110, 0x80 | 99, 0x80 | 110:
 			// this is default position for SSRC in RTP packet
 			ssrc := binary.BigEndian.Uint32(b[8:])
