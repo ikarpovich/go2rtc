@@ -67,47 +67,111 @@ func audioToMedia(codecs []camera.AudioCodecConfiguration) *core.Media {
 	return media
 }
 
-func trackToVideo(track *core.Receiver, video0 *camera.VideoCodecConfiguration, maxWidth, maxHeight int) *camera.VideoCodecConfiguration {
-	profileID := video0.CodecParams[0].ProfileID[0]
-	level := video0.CodecParams[0].Level[0]
-	var attrs camera.VideoCodecAttributes
+func selectVideoConfig(track *core.Receiver, configs []camera.VideoCodecConfiguration, maxWidth, maxHeight int) *camera.VideoCodecConfiguration {
+	if len(configs) == 0 {
+		return nil
+	}
+
+	var (
+		bestCfg    *camera.VideoCodecConfiguration
+		bestAttrs  camera.VideoCodecAttributes
+		bestArea   uint32
+		bestPID    byte
+		bestLevel  byte
+		wantPID    *byte
+		wantLevel  *byte
+	)
 
 	if track != nil {
 		profile := h264.GetProfileLevelID(track.Codec.FmtpLine)
-
-		for i, s := range videoProfiles {
-			if s == profile[:4] {
-				profileID = byte(i)
-				break
+		if len(profile) >= 6 {
+			for i, s := range videoProfiles {
+				if s == profile[:4] {
+					v := byte(i)
+					wantPID = &v
+					break
+				}
 			}
-		}
-
-		for i, s := range videoLevels {
-			if s == profile[4:] {
-				level = byte(i)
-				break
-			}
-		}
-
-		for _, s := range video0.VideoAttrs {
-			if (maxWidth > 0 && int(s.Width) > maxWidth) || (maxHeight > 0 && int(s.Height) > maxHeight) {
-				continue
-			}
-			if s.Width > attrs.Width || s.Height > attrs.Height {
-				attrs = s
+			for i, s := range videoLevels {
+				if s == profile[4:] {
+					v := byte(i)
+					wantLevel = &v
+					break
+				}
 			}
 		}
 	}
 
+	for i := range configs {
+		cfg := &configs[i]
+
+		var attrs camera.VideoCodecAttributes
+		for _, a := range cfg.VideoAttrs {
+			if (maxWidth > 0 && int(a.Width) > maxWidth) || (maxHeight > 0 && int(a.Height) > maxHeight) {
+				continue
+			}
+			if a.Width >= attrs.Width && a.Height >= attrs.Height {
+				attrs = a
+			}
+		}
+
+		if attrs.Width == 0 || attrs.Height == 0 {
+			for _, a := range cfg.VideoAttrs {
+				if a.Width >= attrs.Width && a.Height >= attrs.Height {
+					attrs = a
+				}
+			}
+		}
+
+		var pid byte
+		var level byte
+		for _, params := range cfg.CodecParams {
+			pid = core.Max(params.ProfileID)
+			level = core.Max(params.Level)
+			break
+		}
+		if wantPID != nil {
+			for _, params := range cfg.CodecParams {
+				for _, p := range params.ProfileID {
+					if p == *wantPID {
+						pid = p
+					}
+				}
+			}
+		}
+		if wantLevel != nil {
+			for _, params := range cfg.CodecParams {
+				for _, l := range params.Level {
+					if l == *wantLevel {
+						level = l
+					}
+				}
+			}
+		}
+
+		area := uint32(attrs.Width) * uint32(attrs.Height)
+		if area > bestArea {
+			bestArea = area
+			bestCfg = cfg
+			bestAttrs = attrs
+			bestPID = pid
+			bestLevel = level
+		}
+	}
+
+	if bestCfg == nil {
+		return &configs[0]
+	}
+
 	return &camera.VideoCodecConfiguration{
-		CodecType: video0.CodecType,
+		CodecType: bestCfg.CodecType,
 		CodecParams: []camera.VideoCodecParameters{
 			{
-				ProfileID: []byte{profileID},
-				Level:     []byte{level},
+				ProfileID: []byte{bestPID},
+				Level:     []byte{bestLevel},
 			},
 		},
-		VideoAttrs: []camera.VideoCodecAttributes{attrs},
+		VideoAttrs: []camera.VideoCodecAttributes{bestAttrs},
 	}
 }
 

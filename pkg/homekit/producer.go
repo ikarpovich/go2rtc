@@ -137,10 +137,26 @@ func (c *Client) Start() error {
 func (c *Client) startSRTP() error {
 	log.Printf("[homekit] using SRTP producer mode")
 	videoTrack := c.trackByKind(core.KindVideo)
-	videoCodec := trackToVideo(videoTrack, &c.videoConfig.Codecs[0], c.MaxWidth, c.MaxHeight)
+	videoCodec := selectVideoConfig(videoTrack, c.videoConfig.Codecs, c.MaxWidth, c.MaxHeight)
+	if videoCodec == nil {
+		return errors.New("no supported video codecs")
+	}
+	log.Printf("[homekit] SRTP video: codec=%d profile=%v level=%v width=%d height=%d fps=%d",
+		videoCodec.CodecType,
+		videoCodec.CodecParams[0].ProfileID,
+		videoCodec.CodecParams[0].Level,
+		videoCodec.VideoAttrs[0].Width,
+		videoCodec.VideoAttrs[0].Height,
+		videoCodec.VideoAttrs[0].MaxFrameRate,
+	)
 
 	audioTrack := c.trackByKind(core.KindAudio)
 	audioCodec := trackToAudio(audioTrack, &c.audioConfig.Codecs[0])
+	log.Printf("[homekit] SRTP audio: codec=%d channels=%d sampleRate=%v",
+		audioCodec.CodecType,
+		audioCodec.CodecParams[0].Channels,
+		audioCodec.CodecParams[0].SampleRate,
+	)
 
 	c.videoSession = &srtp.Session{Local: c.srtpEndpoint()}
 	c.audioSession = &srtp.Session{Local: c.srtpEndpoint()}
@@ -150,6 +166,10 @@ func (c *Client) startSRTP() error {
 	if err != nil {
 		return err
 	}
+	log.Printf("[homekit] SRTP endpoints: local=%s:%d/%d remote=%s:%d/%d",
+		c.videoSession.Local.Addr, c.videoSession.Local.Port, c.audioSession.Local.Port,
+		c.videoSession.Remote.Addr, c.videoSession.Remote.Port, c.audioSession.Remote.Port,
+	)
 
 	c.srtp.AddSession(c.videoSession)
 	c.srtp.AddSession(c.audioSession)
