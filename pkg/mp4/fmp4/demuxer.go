@@ -2,7 +2,9 @@
 package fmp4
 
 import (
+	"encoding/hex"
 	"fmt"
+	"log"
 
 	"github.com/AlexxIT/go2rtc/pkg/h264/annexb"
 	"github.com/AlexxIT/go2rtc/pkg/iso"
@@ -17,9 +19,10 @@ type Demuxer struct {
 	VPS        []byte // H.265 only
 
 	// Track information
-	trackID   uint32
-	timeScale uint32
-	naluLen   int
+	trackID      uint32
+	timeScale    uint32
+	naluLen      int
+	loggedSample bool
 
 	// Callback for decoded frames
 	onFrame func(nalus [][]byte, keyframe bool, pts, dts uint64)
@@ -345,7 +348,7 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 	}
 
 	// If parsing failed, try other length sizes as fallback.
-	for _, alt := range []int{1, 2, 4} {
+	for _, alt := range []int{1, 2, 3, 4} {
 		if alt == nlen {
 			continue
 		}
@@ -365,6 +368,17 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 		if len(nalus) > 0 {
 			return nalus, nil
 		}
+	}
+
+	if !d.loggedSample {
+		d.loggedSample = true
+		prefix := sample
+		if len(prefix) > 16 {
+			prefix = prefix[:16]
+		}
+		log.Printf("[fmp4] nalu parse failed len=%d nlen=%d prefix=%s err=%v",
+			len(sample), nlen, hex.EncodeToString(prefix), err,
+		)
 	}
 
 	return nil, err
