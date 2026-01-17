@@ -1,7 +1,10 @@
 package homekit
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync/atomic"
@@ -107,19 +110,40 @@ func (p *HDSProducer) setupHDSTransport() error {
 
 	log.Printf("[homekit] HDS: wrote request to char, value=%v", char.Value)
 
-	// Send PUT request via HTTP
-	if err := p.client.hap.PutCharacters(char); err != nil {
+	// Send PUT request and parse response (contains updated characteristic value)
+	reqBody := hap.JSONCharacters{
+		Value: []hap.JSONCharacter{
+			{AID: 1, IID: char.IID, Value: char.Value},
+		},
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal PUT request: %w", err)
+	}
+
+	putRes, err := p.client.hap.Put(hap.PathCharacteristics, hap.MimeJSON, bytes.NewReader(body))
+	if err != nil {
 		return fmt.Errorf("failed to PUT HDS transport characteristic: %w", err)
 	}
 
-	log.Printf("[homekit] HDS: sent PUT request")
-
-	// Read response
-	if err := p.client.hap.GetCharacter(char); err != nil {
-		return fmt.Errorf("failed to GET HDS transport response: %w", err)
+	// Parse PUT response to get updated characteristic value
+	resBody, err := io.ReadAll(putRes.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read PUT response: %w", err)
 	}
 
-	log.Printf("[homekit] HDS: got response, char.Value type=%T, value=%v", char.Value, char.Value)
+	log.Printf("[homekit] HDS: PUT response body: %s", resBody)
+
+	var resChars hap.JSONCharacters
+	if len(resBody) > 0 {
+		if err := json.Unmarshal(resBody, &resChars); err != nil {
+			return fmt.Errorf("failed to unmarshal PUT response: %w", err)
+		}
+		if len(resChars.Value) > 0 {
+			char.Value = resChars.Value[0].Value
+			log.Printf("[homekit] HDS: updated char.Value from PUT response: %v", char.Value)
+		}
+	}
 
 	var res camera.SetupDataStreamTransportResponse
 	if err := char.ReadTLV8(&res); err != nil {
