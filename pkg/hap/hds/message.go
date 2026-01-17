@@ -244,32 +244,63 @@ func NewResponse(protocol, topic string, id, status int64, body map[string]any) 
 
 // DataSendMetadata represents metadata for dataSend.data packets
 type DataSendMetadata struct {
-	DataType                 int64
-	DataSequenceNumber       int64
-	DataChunkSequenceNumber  int64
-	IsLastDataChunk          bool
-	DataTotalSize            int64
+	DataType                int64
+	DataSequenceNumber      int64
+	DataChunkSequenceNumber int64
+	IsLastDataChunk         bool
+	DataTotalSize           int64
 }
 
 // ParseDataSendMetadata extracts metadata from a packet metadata dict
 func ParseDataSendMetadata(metadata map[string]any) *DataSendMetadata {
 	m := &DataSendMetadata{}
 
-	if v, ok := metadata["dataType"].(int64); ok {
-		m.DataType = v
+	if v, ok := metadata["dataType"]; ok {
+		switch t := v.(type) {
+		case int64:
+			m.DataType = t
+		case int:
+			m.DataType = int64(t)
+		case float64:
+			m.DataType = int64(t)
+		case string:
+			switch t {
+			case "mediaInitialization":
+				m.DataType = DataTypeMediaInit
+			case "mediaFragment":
+				m.DataType = DataTypeMediaFragment
+			}
+		}
 	}
-	if v, ok := metadata["dataSequenceNumber"].(int64); ok {
-		m.DataSequenceNumber = v
+	if v, ok := metadata["dataSequenceNumber"]; ok {
+		m.DataSequenceNumber = toInt64(v)
 	}
-	if v, ok := metadata["dataChunkSequenceNumber"].(int64); ok {
-		m.DataChunkSequenceNumber = v
+	if v, ok := metadata["dataChunkSequenceNumber"]; ok {
+		m.DataChunkSequenceNumber = toInt64(v)
 	}
-	if v, ok := metadata["isLastDataChunk"].(bool); ok {
-		m.IsLastDataChunk = v
+	if v, ok := metadata["isLastDataChunk"]; ok {
+		switch b := v.(type) {
+		case bool:
+			m.IsLastDataChunk = b
+		case string:
+			m.IsLastDataChunk = b == "true"
+		}
 	}
-	if v, ok := metadata["dataTotalSize"].(int64); ok {
-		m.DataTotalSize = v
+	if v, ok := metadata["dataTotalSize"]; ok {
+		m.DataTotalSize = toInt64(v)
 	}
 
 	return m
+}
+
+func toInt64(v any) int64 {
+	switch t := v.(type) {
+	case int64:
+		return t
+	case int:
+		return int64(t)
+	case float64:
+		return int64(t)
+	}
+	return 0
 }

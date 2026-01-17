@@ -384,7 +384,11 @@ func (p *HDSProducer) processMessages() error {
 				if meta.DataType == hds.DataTypeMediaInit {
 					if meta.DataSequenceNumber != initSeq {
 						initSeq = meta.DataSequenceNumber
-						initBuffer = make([]byte, 0, int(meta.DataTotalSize))
+						capacity := int(meta.DataTotalSize)
+						if capacity == 0 {
+							capacity = len(data)
+						}
+						initBuffer = make([]byte, 0, capacity)
 						log.Printf("[homekit] HDS: init seq=%d total=%d bytes", initSeq, meta.DataTotalSize)
 					}
 
@@ -407,7 +411,11 @@ func (p *HDSProducer) processMessages() error {
 					// Start of new fragment
 					if meta.DataSequenceNumber != currentSeq {
 						currentSeq = meta.DataSequenceNumber
-						fragmentBuffer = make([]byte, 0, int(meta.DataTotalSize))
+						capacity := int(meta.DataTotalSize)
+						if capacity == 0 {
+							capacity = len(data)
+						}
+						fragmentBuffer = make([]byte, 0, capacity)
 						log.Printf("[homekit] HDS: fragment seq=%d, total=%d bytes",
 							currentSeq, meta.DataTotalSize)
 					}
