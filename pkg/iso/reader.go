@@ -52,6 +52,7 @@ type AtomTfdt struct {
 }
 
 type AtomTrun struct {
+	SamplesCount     uint32
 	DataOffset       uint32
 	FirstSampleFlags uint32
 	SamplesDuration  []uint32
@@ -149,7 +150,7 @@ func DecodeAtom(b []byte) (any, error) {
 		flags := rd.ReadUint24()
 		samples := rd.ReadUint32()
 
-		atom := &AtomTrun{}
+		atom := &AtomTrun{SamplesCount: samples}
 
 		if flags&TrunDataOffset != 0 {
 			atom.DataOffset = rd.ReadUint32()

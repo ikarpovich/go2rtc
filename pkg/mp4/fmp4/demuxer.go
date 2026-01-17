@@ -216,19 +216,32 @@ func (d *Demuxer) Demux(data []byte) error {
 	var decodeTime uint64
 	var trun *iso.AtomTrun
 	var mdatData []byte
+	var currentTrackID uint32
+	var currentDefaultSampleSize uint32
+	var videoDefaultSampleSize uint32
 
 	for _, atom := range atoms {
 		switch a := atom.(type) {
 		case *iso.AtomTfhd:
+			currentTrackID = a.TrackID
+			currentDefaultSampleSize = a.SampleSize
 			// Track ID from init may not align with fragment track IDs for some cameras.
 			// If it differs, prefer the fragment track ID instead of failing.
 			if d.trackID == 0 || a.TrackID != d.trackID {
 				d.trackID = a.TrackID
 			}
+			if a.TrackID == d.trackID && a.SampleSize != 0 {
+				videoDefaultSampleSize = a.SampleSize
+			}
 		case *iso.AtomTfdt:
 			decodeTime = a.DecodeTime
 		case *iso.AtomTrun:
-			trun = a
+			if currentTrackID == 0 || currentTrackID == d.trackID {
+				trun = a
+				if currentTrackID == d.trackID && currentDefaultSampleSize != 0 {
+					videoDefaultSampleSize = currentDefaultSampleSize
+				}
+			}
 		case *iso.AtomMdat:
 			mdatData = a.Data
 		}
@@ -238,11 +251,18 @@ func (d *Demuxer) Demux(data []byte) error {
 		return fmt.Errorf("missing trun or mdat in fragment")
 	}
 
+	if trun != nil && len(trun.SamplesSize) == 0 && trun.SamplesCount > 0 && videoDefaultSampleSize != 0 {
+		trun.SamplesSize = make([]uint32, trun.SamplesCount)
+		for i := range trun.SamplesSize {
+			trun.SamplesSize[i] = videoDefaultSampleSize
+		}
+	}
+
 	sampleOffset := uint32(0)
 	if trun.DataOffset > 0 {
 		sampleOffset = d.resolveSampleOffset(trun.DataOffset, data, mdatData)
 		if !d.loggedOffset {
-			log.Printf("[fmp4] trun data offset=%d resolved=%d mdat=%d", trun.DataOffset, sampleOffset, len(mdatData))
+			log.Printf("[fmp4] trun data offset=%d resolved=%d mdat=%d defaultSample=%d", trun.DataOffset, sampleOffset, len(mdatData), videoDefaultSampleSize)
 			d.loggedOffset = true
 		}
 	}
@@ -278,6 +298,15 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 		}
 
 		keyframe := (sampleFlags & iso.SampleVideoNonIFrame) == 0
+
+		if !d.loggedSample {
+			prefix := sampleData
+			if len(prefix) > 16 {
+				prefix = prefix[:16]
+			}
+			log.Printf("[fmp4] sample0 size=%d offset=%d prefix=%s", sampleSize, offset-uint32(sampleSize), hex.EncodeToString(prefix))
+			d.loggedSample = true
+		}
 
 		// Extract NAL units from sample
 		nalus, err := d.extractNALUs(sampleData, keyframe)
