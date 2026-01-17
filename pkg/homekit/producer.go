@@ -147,7 +147,7 @@ func (c *Client) startSRTP() error {
 		videoCodec.CodecParams[0].Level,
 		videoCodec.VideoAttrs[0].Width,
 		videoCodec.VideoAttrs[0].Height,
-		videoCodec.VideoAttrs[0].MaxFrameRate,
+		videoCodec.VideoAttrs[0].Framerate,
 	)
 
 	audioTrack := c.trackByKind(core.KindAudio)
