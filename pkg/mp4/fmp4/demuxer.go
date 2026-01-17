@@ -328,8 +328,8 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 		}
 	}
 
-	// Annex B samples start with start code.
-	if isAnnexB(sample) {
+	// Annex B samples include start codes.
+	if containsStartCode(sample) {
 		for _, nalu := range splitAnnexB(sample) {
 			nalus = append(nalus, nalu)
 		}
