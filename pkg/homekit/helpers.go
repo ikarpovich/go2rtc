@@ -78,6 +78,7 @@ func selectVideoConfig(track *core.Receiver, configs []camera.VideoCodecConfigur
 		bestArea   uint32
 		bestPID    byte
 		bestLevel  byte
+		bestParams camera.VideoCodecParameters
 		wantPID    *byte
 		wantLevel  *byte
 	)
@@ -125,10 +126,10 @@ func selectVideoConfig(track *core.Receiver, configs []camera.VideoCodecConfigur
 
 		var pid byte
 		var level byte
-		for _, params := range cfg.CodecParams {
-			pid = core.Max(params.ProfileID)
-			level = core.Max(params.Level)
-			break
+		if len(cfg.CodecParams) > 0 {
+			pid = core.Max(cfg.CodecParams[0].ProfileID)
+			level = core.Max(cfg.CodecParams[0].Level)
+			bestParams = cfg.CodecParams[0]
 		}
 		if wantPID != nil {
 			for _, params := range cfg.CodecParams {
@@ -156,6 +157,9 @@ func selectVideoConfig(track *core.Receiver, configs []camera.VideoCodecConfigur
 			bestAttrs = attrs
 			bestPID = pid
 			bestLevel = level
+			if len(cfg.CodecParams) > 0 {
+				bestParams = cfg.CodecParams[0]
+			}
 		}
 	}
 
@@ -169,6 +173,9 @@ func selectVideoConfig(track *core.Receiver, configs []camera.VideoCodecConfigur
 			{
 				ProfileID: []byte{bestPID},
 				Level:     []byte{bestLevel},
+				PacketizationMode: bestParams.PacketizationMode,
+				CVOEnabled:        bestParams.CVOEnabled,
+				CVOID:             bestParams.CVOID,
 			},
 		},
 		VideoAttrs: []camera.VideoCodecAttributes{bestAttrs},
