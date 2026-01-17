@@ -129,7 +129,10 @@ func (p *HDSProducer) setupHDSTransport() error {
 			},
 		}
 		if body, err := json.Marshal(reqBody); err == nil {
-			_, _ = p.client.hap.Put(hap.PathCharacteristics, hap.MimeJSON, bytes.NewReader(body))
+			if res, err := p.client.hap.Put(hap.PathCharacteristics, hap.MimeJSON, bytes.NewReader(body)); err == nil {
+				_, _ = io.Copy(io.Discard, res.Body)
+				_ = res.Body.Close()
+			}
 			log.Printf("[homekit] HDS: sent close request to clear any existing session")
 			// Small delay to let camera process the close
 			time.Sleep(100 * time.Millisecond)
@@ -168,6 +171,7 @@ func (p *HDSProducer) setupHDSTransport() error {
 	if err != nil {
 		return fmt.Errorf("failed to PUT HDS transport characteristic: %w", err)
 	}
+	defer putRes.Body.Close()
 
 	// Parse PUT response to get updated characteristic value
 	resBody, err := io.ReadAll(putRes.Body)
