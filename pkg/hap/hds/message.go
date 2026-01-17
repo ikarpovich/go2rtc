@@ -76,21 +76,18 @@ func (m *Message) IsResponse() bool {
 
 // ParseMessage parses a raw message payload into a Message
 func ParseMessage(data []byte) (*Message, error) {
-	r := NewReader(data)
-
-	// Read header length
-	headerLen, err := r.Decode()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read header length: %w", err)
+	if len(data) < 1 {
+		return nil, fmt.Errorf("%w: missing header length", ErrInvalidMessage)
 	}
 
-	headerLenInt, ok := headerLen.(int64)
-	if !ok {
-		return nil, fmt.Errorf("%w: header length must be integer", ErrInvalidMessage)
+	// First byte is header length (uint8), followed by header and body payloads.
+	headerLen := int(data[0])
+	if len(data) < 1+headerLen {
+		return nil, fmt.Errorf("%w: header length exceeds payload", ErrInvalidMessage)
 	}
 
 	// Parse header dict
-	headerData := data[r.pos : r.pos+int(headerLenInt)]
+	headerData := data[1 : 1+headerLen]
 	headerReader := NewReader(headerData)
 	headerVal, err := headerReader.Decode()
 	if err != nil {
@@ -102,11 +99,10 @@ func ParseMessage(data []byte) (*Message, error) {
 		return nil, fmt.Errorf("%w: header must be dictionary", ErrInvalidMessage)
 	}
 
-	// Move reader past header
-	r.pos += int(headerLenInt)
-
-	// Parse message body
-	bodyVal, err := r.Decode()
+	// Parse message body (remaining bytes)
+	bodyData := data[1+headerLen:]
+	bodyReader := NewReader(bodyData)
+	bodyVal, err := bodyReader.Decode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read body: %w", err)
 	}
@@ -180,25 +176,26 @@ func (m *Message) Marshal() ([]byte, error) {
 		return nil, fmt.Errorf("invalid message type: %d", m.Type)
 	}
 
-	// Encode header to get its length
+	// Encode header and body with DataStream encoding.
 	headerWriter := NewWriter()
 	if err := headerWriter.Encode(header); err != nil {
 		return nil, fmt.Errorf("failed to encode header: %w", err)
 	}
 	headerBytes := headerWriter.Bytes()
-
-	// Write header length
-	if err := w.Encode(int64(len(headerBytes))); err != nil {
-		return nil, fmt.Errorf("failed to encode header length: %w", err)
+	if len(headerBytes) > 0xFF {
+		return nil, fmt.Errorf("header too long: %d", len(headerBytes))
 	}
 
-	// Write header
-	w.buf = append(w.buf, headerBytes...)
-
-	// Write body
-	if err := w.Encode(m.Body); err != nil {
+	bodyWriter := NewWriter()
+	if err := bodyWriter.Encode(m.Body); err != nil {
 		return nil, fmt.Errorf("failed to encode body: %w", err)
 	}
+	bodyBytes := bodyWriter.Bytes()
+
+	// Payload format: 1-byte header length + header bytes + body bytes.
+	w.buf = append(w.buf, byte(len(headerBytes)))
+	w.buf = append(w.buf, headerBytes...)
+	w.buf = append(w.buf, bodyBytes...)
 
 	return w.Bytes(), nil
 }
