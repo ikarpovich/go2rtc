@@ -104,6 +104,28 @@ func (p *HDSProducer) setupHDSTransport() error {
 		return fmt.Errorf("no SetupDataStreamTransport characteristic")
 	}
 
+	// Check if there's an existing session that needs to be closed
+	// First, try to close any existing session
+	closeReq := camera.SetupDataStreamTransportRequest{
+		SessionCommandType: 2, // Stop/Close
+		TransportType:      0, // HDS
+		ControllerKeySalt:  "", // Empty for close
+	}
+	if err := char.Write(&closeReq); err == nil {
+		// Try to send the close request, ignore errors
+		reqBody := hap.JSONCharacters{
+			Value: []hap.JSONCharacter{
+				{AID: 1, IID: char.IID, Value: char.Value},
+			},
+		}
+		if body, err := json.Marshal(reqBody); err == nil {
+			_, _ = p.client.hap.Put(hap.PathCharacteristics, hap.MimeJSON, bytes.NewReader(body))
+			log.Printf("[homekit] HDS: sent close request to clear any existing session")
+			// Small delay to let camera process the close
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+
 	// Generate controller key salt
 	controllerSalt := core.RandString(32, 0)
 
