@@ -104,10 +104,20 @@ func (p *HDSProducer) setupHDSTransport() error {
 		return fmt.Errorf("no SetupDataStreamTransport characteristic")
 	}
 
+	// Try to read current state of the characteristic
+	log.Printf("[homekit] HDS: current char.Value: %v", char.Value)
+	if char.Value != nil {
+		var currentState camera.SetupDataStreamTransportResponse
+		if err := char.ReadTLV8(&currentState); err == nil {
+			log.Printf("[homekit] HDS: detected existing session - Status=%d, Port=%d",
+				currentState.Status, currentState.TransportTypeSessionParameters.TCPListeningPort)
+		}
+	}
+
 	// Check if there's an existing session that needs to be closed
-	// First, try to close any existing session
+	// Try to end any existing session with SessionCommandEnd (0)
 	closeReq := camera.SetupDataStreamTransportRequest{
-		SessionCommandType: 2, // Stop/Close
+		SessionCommandType: 0, // End/Close (not suspend!)
 		TransportType:      0, // HDS
 		ControllerKeySalt:  "", // Empty for close
 	}
