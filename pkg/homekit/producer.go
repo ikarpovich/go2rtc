@@ -116,6 +116,20 @@ func (c *Client) Start() error {
 		return c.startMJPEG()
 	}
 
+	// Check if camera supports HDS
+	acc, err := c.hap.GetFirstAccessory()
+	if err == nil {
+		if char := acc.GetCharacter(camera.TypeSupportedDataStreamTransportConfiguration); char != nil {
+			// Camera supports HDS - use HDS streaming
+			return c.startHDS()
+		}
+	}
+
+	// Fall back to SRTP streaming
+	return c.startSRTP()
+}
+
+func (c *Client) startSRTP() error {
 	videoTrack := c.trackByKind(core.KindVideo)
 	videoCodec := trackToVideo(videoTrack, &c.videoConfig.Codecs[0], c.MaxWidth, c.MaxHeight)
 

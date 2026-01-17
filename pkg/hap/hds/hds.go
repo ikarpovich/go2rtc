@@ -174,3 +174,40 @@ func (c *Conn) SetReadDeadline(t time.Time) error {
 func (c *Conn) SetWriteDeadline(t time.Time) error {
 	return c.conn.SetWriteDeadline(t)
 }
+
+// ReadMessage reads and parses a complete HDS message
+func (c *Conn) ReadMessage() (*Message, error) {
+	data, err := c.read()
+	if err != nil {
+		return nil, err
+	}
+	return ParseMessage(data)
+}
+
+// WriteMessage serializes and writes an HDS message
+func (c *Conn) WriteMessage(msg *Message) error {
+	data, err := msg.Marshal()
+	if err != nil {
+		return err
+	}
+	_, err = c.Write(data)
+	return err
+}
+
+// SendEvent sends an event message (one-way notification)
+func (c *Conn) SendEvent(protocol, topic string, body map[string]any) error {
+	msg := NewEvent(protocol, topic, body)
+	return c.WriteMessage(msg)
+}
+
+// SendRequest sends a request message (expects response)
+func (c *Conn) SendRequest(protocol, topic string, id int64, body map[string]any) error {
+	msg := NewRequest(protocol, topic, id, body)
+	return c.WriteMessage(msg)
+}
+
+// SendResponse sends a response message
+func (c *Conn) SendResponse(protocol, topic string, id, status int64, body map[string]any) error {
+	msg := NewResponse(protocol, topic, id, status, body)
+	return c.WriteMessage(msg)
+}
