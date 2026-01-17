@@ -38,6 +38,10 @@ func (s *Session) SetConn(conn net.PacketConn) {
 	s.conn = conn
 }
 
+func (s *Session) Conn() net.PacketConn {
+	return s.conn
+}
+
 type Endpoint struct {
 	Addr       string
 	Port       uint16

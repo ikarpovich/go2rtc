@@ -12,6 +12,7 @@ import (
 	"github.com/AlexxIT/go2rtc/pkg/hap"
 	"github.com/AlexxIT/go2rtc/pkg/hap/camera"
 	"github.com/AlexxIT/go2rtc/pkg/srtp"
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 )
 
@@ -220,6 +221,10 @@ func (c *Client) startSRTP() error {
 		c.videoSession.Local.Addr, c.videoSession.Local.Port, c.audioSession.Local.Port,
 		c.videoSession.Remote.Addr, c.videoSession.Remote.Port, c.audioSession.Remote.Port,
 	)
+	log.Printf("[homekit] SRTP SSRC: local video=%d audio=%d remote video=%d audio=%d",
+		c.videoSession.Local.SSRC, c.audioSession.Local.SSRC,
+		c.videoSession.Remote.SSRC, c.audioSession.Remote.SSRC,
+	)
 
 	if c.SRTPSplit {
 		if err := c.videoSession.Init(); err != nil {
@@ -234,6 +239,8 @@ func (c *Client) startSRTP() error {
 		c.srtp.AddSession(c.videoSession)
 		c.srtp.AddSession(c.audioSession)
 	}
+	c.sendInitialRTCP(c.videoSession)
+	c.sendInitialRTCP(c.audioSession)
 
 	deadline := time.NewTimer(core.ConnDeadline)
 
@@ -296,6 +303,18 @@ func (c *Client) Stop() error {
 	}
 
 	return c.Connection.Stop()
+}
+
+func (c *Client) sendInitialRTCP(session *srtp.Session) {
+	if session == nil || session.Remote == nil || session.Conn() == nil {
+		return
+	}
+	rr := &rtcp.ReceiverReport{SSRC: session.Local.SSRC}
+	if _, err := session.WriteRTCP(rr); err != nil {
+		log.Printf("[homekit] SRTP initial RTCP error: %v", err)
+		return
+	}
+	log.Printf("[homekit] SRTP sent initial RTCP to %s:%d", session.Remote.Addr, session.Remote.Port)
 }
 
 func (c *Client) trackByKind(kind string) *core.Receiver {
