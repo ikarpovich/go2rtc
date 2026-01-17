@@ -268,12 +268,15 @@ func (p *HDSProducer) sendHello() error {
 // requestVideoStream requests a video stream via dataSend.open
 func (p *HDSProducer) requestVideoStream() error {
 	id := p.requestID.Add(1)
+	streamID := id
 
-	log.Printf("[homekit] HDS: requesting video stream (id=%d)", id)
+	log.Printf("[homekit] HDS: requesting video stream (id=%d, streamId=%d)", id, streamID)
 
 	body := map[string]any{
-		"target": "controller",
-		"type":   "camera.recording",
+		"streamId": streamID,
+		"target":   "controller",
+		"type":     "ipcamera.recording",
+		"reason":   "live",
 	}
 
 	return p.hdsConn.SendRequest(hds.ProtocolDataSend, hds.TopicOpen, id, body)
