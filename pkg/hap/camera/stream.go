@@ -3,6 +3,7 @@ package camera
 import (
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/hap"
@@ -114,13 +115,13 @@ func (s *Stream) ExchangeEndpoints(videoSession, audioSession *srtp.Session) err
 		},
 		VideoCrypto: SRTPCryptoSuite{
 			CryptoSuite: videoSession.CryptoSuite,
-			MasterKey:  string(videoSession.Local.MasterKey),
-			MasterSalt: string(videoSession.Local.MasterSalt),
+			MasterKey:   string(videoSession.Local.MasterKey),
+			MasterSalt:  string(videoSession.Local.MasterSalt),
 		},
 		AudioCrypto: SRTPCryptoSuite{
 			CryptoSuite: audioSession.CryptoSuite,
-			MasterKey:  string(audioSession.Local.MasterKey),
-			MasterSalt: string(audioSession.Local.MasterSalt),
+			MasterKey:   string(audioSession.Local.MasterKey),
+			MasterSalt:  string(audioSession.Local.MasterSalt),
 		},
 	}
 
@@ -142,6 +143,15 @@ func (s *Stream) ExchangeEndpoints(videoSession, audioSession *srtp.Session) err
 	if res.Status != 0 {
 		return fmt.Errorf("hap: SetupEndpoints error status=%d", res.Status)
 	}
+	log.Printf("[homekit] SRTP response: remote=%s vport=%d aport=%d vcrypto=%d acrypto=%d vssrc=%d assrc=%d",
+		res.Address.IPAddr,
+		res.Address.VideoRTPPort,
+		res.Address.AudioRTPPort,
+		res.VideoCrypto.CryptoSuite,
+		res.AudioCrypto.CryptoSuite,
+		res.VideoSSRC,
+		res.AudioSSRC,
+	)
 
 	videoSession.Remote = &srtp.Endpoint{
 		Addr:       res.Address.IPAddr,

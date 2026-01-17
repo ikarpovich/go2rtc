@@ -1,6 +1,7 @@
 package srtp
 
 import (
+	"log"
 	"net"
 	"time"
 
@@ -27,6 +28,14 @@ type Session struct {
 
 	senderRTCP rtcp.SenderReport
 	senderTime time.Time
+}
+
+func (s *Session) Init() error {
+	return s.init()
+}
+
+func (s *Session) SetConn(conn net.PacketConn) {
+	s.conn = conn
 }
 
 type Endpoint struct {
@@ -72,6 +81,40 @@ func (s *Session) init() error {
 	s.senderTime = time.Now().Add(s.RTCPInterval)
 
 	return nil
+}
+
+func (s *Session) ServeConn(conn net.PacketConn) {
+	if conn != nil {
+		s.conn = conn
+	}
+	go s.handleConn()
+}
+
+func (s *Session) handleConn() {
+	if s.conn == nil {
+		return
+	}
+	b := make([]byte, 2048)
+	seenAny := false
+	for {
+		n, addr, err := s.conn.ReadFrom(b)
+		if err != nil {
+			return
+		}
+
+		packetType := b[1]
+		if !seenAny {
+			seenAny = true
+			log.Printf("[srtp] recv packet type=%d from=%v size=%d", packetType, addr, n)
+		}
+
+		switch packetType {
+		case 99, 110, 0x80 | 99, 0x80 | 110:
+			s.ReadRTP(b[:n])
+		case 200, 201, 202, 203, 204, 205, 206, 207:
+			s.ReadRTCP(b[:n])
+		}
+	}
 }
 
 func (s *Session) WriteRTP(packet *rtp.Packet) (int, error) {

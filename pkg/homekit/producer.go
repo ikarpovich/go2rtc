@@ -27,6 +27,8 @@ type Client struct {
 
 	videoSession *srtp.Session
 	audioSession *srtp.Session
+	videoConn    net.PacketConn
+	audioConn    net.PacketConn
 
 	stream *camera.Stream
 
@@ -35,6 +37,7 @@ type Client struct {
 	Bitrate   int `json:"-"` // in bits/s
 
 	SRTPCryptoSuite byte `json:"-"`
+	SRTPSplit       bool `json:"-"`
 }
 
 func Dial(rawURL string, server *srtp.Server) (*Client, error) {
@@ -54,6 +57,8 @@ func Dial(rawURL string, server *srtp.Server) (*Client, error) {
 		},
 		hap:  conn,
 		srtp: server,
+		// Default to split ports to match HomeKit SRTP expectations.
+		SRTPSplit: true,
 	}
 
 	return client, nil
@@ -192,6 +197,22 @@ func (c *Client) startSRTP() error {
 		c.audioSession.Local.MasterSalt = nil
 	}
 
+	if c.SRTPSplit {
+		var err error
+		c.videoConn, err = net.ListenPacket("udp4", "0.0.0.0:0")
+		if err != nil {
+			return err
+		}
+		c.audioConn, err = net.ListenPacket("udp4", "0.0.0.0:0")
+		if err != nil {
+			_ = c.videoConn.Close()
+			c.videoConn = nil
+			return err
+		}
+		c.videoSession.Local.Port = uint16(c.videoConn.LocalAddr().(*net.UDPAddr).Port)
+		c.audioSession.Local.Port = uint16(c.audioConn.LocalAddr().(*net.UDPAddr).Port)
+	}
+
 	var err error
 	c.stream, err = camera.NewStream(c.hap, videoCodec, audioCodec, c.videoSession, c.audioSession, c.Bitrate)
 	if err != nil {
@@ -202,8 +223,19 @@ func (c *Client) startSRTP() error {
 		c.videoSession.Remote.Addr, c.videoSession.Remote.Port, c.audioSession.Remote.Port,
 	)
 
-	c.srtp.AddSession(c.videoSession)
-	c.srtp.AddSession(c.audioSession)
+	if c.SRTPSplit {
+		if err := c.videoSession.Init(); err != nil {
+			return err
+		}
+		if err := c.audioSession.Init(); err != nil {
+			return err
+		}
+		c.videoSession.ServeConn(c.videoConn)
+		c.audioSession.ServeConn(c.audioConn)
+	} else {
+		c.srtp.AddSession(c.videoSession)
+		c.srtp.AddSession(c.audioSession)
+	}
 
 	deadline := time.NewTimer(core.ConnDeadline)
 
@@ -250,11 +282,19 @@ func (c *Client) startSRTP() error {
 }
 
 func (c *Client) Stop() error {
-	if c.videoSession != nil && c.videoSession.Remote != nil {
+	if c.videoSession != nil && c.videoSession.Remote != nil && !c.SRTPSplit {
 		c.srtp.DelSession(c.videoSession)
 	}
-	if c.audioSession != nil && c.audioSession.Remote != nil {
+	if c.audioSession != nil && c.audioSession.Remote != nil && !c.SRTPSplit {
 		c.srtp.DelSession(c.audioSession)
+	}
+	if c.videoConn != nil {
+		_ = c.videoConn.Close()
+		c.videoConn = nil
+	}
+	if c.audioConn != nil {
+		_ = c.audioConn.Close()
+		c.audioConn = nil
 	}
 
 	return c.Connection.Stop()
