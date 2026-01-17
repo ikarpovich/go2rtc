@@ -19,6 +19,7 @@ type Demuxer struct {
 	// Track information
 	trackID   uint32
 	timeScale uint32
+	naluLen   int
 
 	// Callback for decoded frames
 	onFrame func(nalus [][]byte, keyframe bool, pts, dts uint64)
@@ -92,6 +93,8 @@ func (d *Demuxer) parseAVCC(config []byte) error {
 	// numOfPictureParameterSets (1)
 	// ... PPS entries ...
 
+	// lengthSizeMinusOne stored in low 2 bits of byte 4
+	d.naluLen = int(config[4]&0x03) + 1
 	pos := 5 // skip first 5 bytes
 
 	// Read SPS count
@@ -147,6 +150,8 @@ func (d *Demuxer) parseHVCC(config []byte) error {
 	}
 
 	// hvcC format is complex, simplified parsing:
+	// lengthSizeMinusOne stored in low 2 bits of byte 21
+	d.naluLen = int(config[21]&0x03) + 1
 	// Skip to numOfArrays at byte 22
 	pos := 22
 	numArrays := int(config[pos])
@@ -320,13 +325,27 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 		}
 	}
 
+	// Annex B samples start with start code.
+	if isAnnexB(sample) {
+		for _, nalu := range splitAnnexB(sample) {
+			nalus = append(nalus, nalu)
+		}
+		return nalus, nil
+	}
+
 	// Extract NAL units from length-prefixed format
-	// Format: [4-byte length][NALU][4-byte length][NALU]...
+	// Format: [len][NALU]... with len size from avcC/hvcC
+	nlen := d.naluLen
+	if nlen < 1 || nlen > 4 {
+		nlen = 4
+	}
 	pos := 0
-	for pos+4 <= len(sample) {
-		// Read length (big-endian 32-bit)
-		naluLen := int(sample[pos])<<24 | int(sample[pos+1])<<16 | int(sample[pos+2])<<8 | int(sample[pos+3])
-		pos += 4
+	for pos+nlen <= len(sample) {
+		naluLen := 0
+		for i := 0; i < nlen; i++ {
+			naluLen = (naluLen << 8) | int(sample[pos+i])
+		}
+		pos += nlen
 
 		if pos+naluLen > len(sample) {
 			return nil, fmt.Errorf("NALU length %d exceeds sample bounds", naluLen)
@@ -339,6 +358,46 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 	}
 
 	return nalus, nil
+}
+
+func isAnnexB(b []byte) bool {
+	if len(b) < 3 {
+		return false
+	}
+	if b[0] == 0 && b[1] == 0 && b[2] == 1 {
+		return true
+	}
+	if len(b) >= 4 && b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 1 {
+		return true
+	}
+	return false
+}
+
+func splitAnnexB(b []byte) [][]byte {
+	var nalus [][]byte
+	start := -1
+	i := 0
+	for i < len(b) {
+		var sc int
+		if i+3 < len(b) && b[i] == 0 && b[i+1] == 0 && b[i+2] == 1 {
+			sc = 3
+		} else if i+4 < len(b) && b[i] == 0 && b[i+1] == 0 && b[i+2] == 0 && b[i+3] == 1 {
+			sc = 4
+		}
+		if sc != 0 {
+			if start != -1 && i > start {
+				nalus = append(nalus, b[start:i])
+			}
+			i += sc
+			start = i
+			continue
+		}
+		i++
+	}
+	if start != -1 && start < len(b) {
+		nalus = append(nalus, b[start:])
+	}
+	return nalus
 }
 
 // GetSPS returns the SPS (Sequence Parameter Set) for H.264/H.265
