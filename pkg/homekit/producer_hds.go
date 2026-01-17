@@ -105,15 +105,21 @@ func (p *HDSProducer) setupHDSTransport() error {
 		return fmt.Errorf("failed to write HDS transport request: %w", err)
 	}
 
+	log.Printf("[homekit] HDS: wrote request to char, value=%v", char.Value)
+
 	// Send PUT request via HTTP
 	if err := p.client.hap.PutCharacters(char); err != nil {
 		return fmt.Errorf("failed to PUT HDS transport characteristic: %w", err)
 	}
 
+	log.Printf("[homekit] HDS: sent PUT request")
+
 	// Read response
 	if err := p.client.hap.GetCharacter(char); err != nil {
 		return fmt.Errorf("failed to GET HDS transport response: %w", err)
 	}
+
+	log.Printf("[homekit] HDS: got response, char.Value type=%T, value=%v", char.Value, char.Value)
 
 	var res camera.SetupDataStreamTransportResponse
 	if err := char.ReadTLV8(&res); err != nil {
