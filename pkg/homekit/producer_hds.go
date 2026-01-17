@@ -78,17 +78,12 @@ func (c *Client) startHDS() error {
 		return fmt.Errorf("failed to setup HDS transport: %w", err)
 	}
 
-	// Send hello
+	// Send hello and wait for the accessory hello before requesting a stream.
 	if err := producer.sendHello(); err != nil {
 		return fmt.Errorf("failed to send hello: %w", err)
 	}
 
-	// Request video stream
-	if err := producer.requestVideoStream(); err != nil {
-		return fmt.Errorf("failed to request video stream: %w", err)
-	}
-
-	// Process HDS messages
+	// Process HDS messages (will request stream after hello)
 	return producer.processMessages()
 }
 
@@ -285,6 +280,7 @@ func (p *HDSProducer) requestVideoStream() error {
 func (p *HDSProducer) processMessages() error {
 	var fragmentBuffer []byte
 	var currentSeq int64 = -1
+	var streamRequested bool
 
 	deadline := time.NewTimer(core.ConnDeadline)
 
@@ -307,6 +303,15 @@ func (p *HDSProducer) processMessages() error {
 
 		// Handle different message types
 		switch {
+		case msg.IsEvent() && msg.Protocol == hds.ProtocolControl && msg.Topic == hds.TopicHello:
+			log.Printf("[homekit] HDS: received control.hello")
+			if !streamRequested {
+				if err := p.requestVideoStream(); err != nil {
+					return fmt.Errorf("failed to request video stream: %w", err)
+				}
+				streamRequested = true
+			}
+
 		case msg.IsResponse() && msg.Protocol == hds.ProtocolDataSend && msg.Topic == hds.TopicOpen:
 			// Stream opened successfully
 			streamID, _ := msg.Body["streamId"].(int64)
