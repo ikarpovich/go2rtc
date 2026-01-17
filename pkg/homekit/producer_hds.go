@@ -1,7 +1,10 @@
 package homekit
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync/atomic"
@@ -130,7 +133,7 @@ func (p *HDSProducer) setupHDSTransport() error {
 	if err := p.client.hap.PutCharacters(char); err != nil {
 		return fmt.Errorf("failed to PUT HDS transport characteristic: %w", err)
 	}
-	if err := p.client.hap.GetCharacter(char); err != nil {
+	if err := p.getCharacteristicWithRaw(char); err != nil {
 		return fmt.Errorf("failed to read HDS transport characteristic: %w", err)
 	}
 
@@ -165,6 +168,46 @@ func (p *HDSProducer) setupHDSTransport() error {
 	}
 
 	log.Printf("[homekit] HDS: transport established")
+	return nil
+}
+
+func (p *HDSProducer) getCharacteristicWithRaw(char *hap.Character) error {
+	query := fmt.Sprintf("%d.%d", hap.DeviceAID, char.IID)
+	res, err := p.client.hap.Get(hap.PathCharacteristics + "?id=" + query)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[homekit] HDS: GET response body: %s", bytes.TrimSpace(body))
+
+	var v hap.JSONCharacters
+	if err := json.Unmarshal(body, &v); err != nil {
+		return fmt.Errorf("failed to unmarshal GET response: %w", err)
+	}
+	if len(v.Value) == 0 {
+		return fmt.Errorf("camera returned empty response")
+	}
+	if v.Value[0].Status != nil {
+		var statusCode int
+		switch s := v.Value[0].Status.(type) {
+		case float64:
+			statusCode = int(s)
+		case int:
+			statusCode = s
+		case int64:
+			statusCode = int(s)
+		}
+		if statusCode != 0 {
+			return fmt.Errorf("camera rejected HDS setup with status %d", statusCode)
+		}
+	}
+	char.Value = v.Value[0].Value
 	return nil
 }
 
