@@ -37,8 +37,9 @@ type Client struct {
 	MaxHeight int `json:"-"`
 	Bitrate   int `json:"-"` // in bits/s
 
-	SRTPCryptoSuite byte `json:"-"`
-	SRTPSplit       bool `json:"-"`
+	SRTPCryptoSuite byte   `json:"-"`
+	SRTPSplit       bool   `json:"-"`
+	SRTPLocalIP     string `json:"-"`
 }
 
 func Dial(rawURL string, server *srtp.Server) (*Client, error) {
@@ -198,11 +199,15 @@ func (c *Client) startSRTP() error {
 
 	if c.SRTPSplit {
 		var err error
-		c.videoConn, err = net.ListenPacket("udp4", "0.0.0.0:0")
+		bindIP := "0.0.0.0"
+		if c.SRTPLocalIP != "" {
+			bindIP = c.SRTPLocalIP
+		}
+		c.videoConn, err = net.ListenPacket("udp4", net.JoinHostPort(bindIP, "0"))
 		if err != nil {
 			return err
 		}
-		c.audioConn, err = net.ListenPacket("udp4", "0.0.0.0:0")
+		c.audioConn, err = net.ListenPacket("udp4", net.JoinHostPort(bindIP, "0"))
 		if err != nil {
 			_ = c.videoConn.Close()
 			c.videoConn = nil
@@ -351,8 +356,12 @@ func (c *Client) startMJPEG() error {
 }
 
 func (c *Client) srtpEndpoint() *srtp.Endpoint {
+	addr := c.hap.LocalIP()
+	if c.SRTPLocalIP != "" {
+		addr = c.SRTPLocalIP
+	}
 	return &srtp.Endpoint{
-		Addr:       c.hap.LocalIP(),
+		Addr:       addr,
 		Port:       uint16(c.srtp.Port()),
 		MasterKey:  []byte(core.RandString(16, 0)),
 		MasterSalt: []byte(core.RandString(14, 0)),

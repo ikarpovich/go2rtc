@@ -148,6 +148,9 @@ func streamHandler(rawURL string) (core.Producer, error) {
 		case "aes128":
 			client.SRTPCryptoSuite = camera.CryptoAES_CM_128_HMAC_SHA1_80
 		}
+		if bindIP := query.Get("srtp_bind_ip"); bindIP != "" {
+			client.SRTPLocalIP = bindIP
+		}
 		switch strings.ToLower(query.Get("srtp_mode")) {
 		case "single", "shared":
 			client.SRTPSplit = false
