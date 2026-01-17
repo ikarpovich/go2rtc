@@ -71,6 +71,7 @@ type JSONCharacter struct {
 	Status any    `json:"status,omitempty"`
 	Value  any    `json:"value,omitempty"`
 	Event  any    `json:"ev,omitempty"`
+	Reply  bool   `json:"r,omitempty"`
 }
 
 // 4.2.1.2 Invalid Setup Codes

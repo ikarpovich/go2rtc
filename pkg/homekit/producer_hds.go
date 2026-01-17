@@ -169,9 +169,10 @@ func (p *HDSProducer) setupHDSTransport() error {
 }
 
 func (p *HDSProducer) putCharacteristicWithResponse(char *hap.Character) error {
+	wantReply := true
 	reqBody := hap.JSONCharacters{
 		Value: []hap.JSONCharacter{
-			{AID: hap.DeviceAID, IID: char.IID, Value: char.Value},
+			{AID: hap.DeviceAID, IID: char.IID, Value: char.Value, Reply: wantReply},
 		},
 	}
 	body, err := json.Marshal(reqBody)
@@ -184,6 +185,7 @@ func (p *HDSProducer) putCharacteristicWithResponse(char *hap.Character) error {
 		return err
 	}
 	defer res.Body.Close()
+	log.Printf("[homekit] HDS: PUT status: %s", res.Status)
 
 	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
@@ -226,6 +228,7 @@ func (p *HDSProducer) putCharacteristicWithResponse(char *hap.Character) error {
 		return fmt.Errorf("no value in PUT response and GET failed: %w", err)
 	}
 	defer getRes.Body.Close()
+	log.Printf("[homekit] HDS: GET status: %s", getRes.Status)
 	getBody, err := io.ReadAll(getRes.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read GET response: %w", err)
