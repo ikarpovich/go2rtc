@@ -93,15 +93,28 @@ func (p *HDSProducer) setupHDSTransport() error {
 	// Generate controller key salt
 	controllerSalt := core.RandString(32, 0)
 
-	// Create request - note: actual write/read mechanism depends on HAP implementation
-	// For now, we'll use ReadTLV8 to get the response after the characteristic is set
-	_ = camera.SetupDataStreamTransportRequest{
+	// Create request
+	req := camera.SetupDataStreamTransportRequest{
 		SessionCommandType: 1, // Start
 		TransportType:      0, // HDS
 		ControllerKeySalt:  controllerSalt,
 	}
 
+	// Write request to characteristic
+	if err := char.Write(&req); err != nil {
+		return fmt.Errorf("failed to write HDS transport request: %w", err)
+	}
+
+	// Send PUT request via HTTP
+	if err := p.client.hap.PutCharacters(char); err != nil {
+		return fmt.Errorf("failed to PUT HDS transport characteristic: %w", err)
+	}
+
 	// Read response
+	if err := p.client.hap.GetCharacter(char); err != nil {
+		return fmt.Errorf("failed to GET HDS transport response: %w", err)
+	}
+
 	var res camera.SetupDataStreamTransportResponse
 	if err := char.ReadTLV8(&res); err != nil {
 		return fmt.Errorf("failed to read HDS transport response: %w", err)
