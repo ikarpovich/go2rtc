@@ -149,15 +149,13 @@ func (c *Client) startSRTP() error {
 			if err := char.ReadTLV8(&rtp); err == nil {
 				log.Printf("[homekit] SRTP supported crypto: %v", rtp.SRTPCryptoType)
 				if c.SRTPCryptoSuite == 0 {
-					if core.Contains(rtp.SRTPCryptoType, camera.CryptoDisabled) {
-						c.SRTPCryptoSuite = camera.CryptoDisabled
-					} else {
+					switch {
+					case core.Contains(rtp.SRTPCryptoType, camera.CryptoAES_CM_128_HMAC_SHA1_80):
 						c.SRTPCryptoSuite = camera.CryptoAES_CM_128_HMAC_SHA1_80
-						if !core.Contains(rtp.SRTPCryptoType, c.SRTPCryptoSuite) {
-							if core.Contains(rtp.SRTPCryptoType, camera.CryptoAES_CM_256_HMAC_SHA1_80) {
-								c.SRTPCryptoSuite = camera.CryptoAES_CM_256_HMAC_SHA1_80
-							}
-						}
+					case core.Contains(rtp.SRTPCryptoType, camera.CryptoAES_CM_256_HMAC_SHA1_80):
+						c.SRTPCryptoSuite = camera.CryptoAES_CM_256_HMAC_SHA1_80
+					case core.Contains(rtp.SRTPCryptoType, camera.CryptoDisabled):
+						c.SRTPCryptoSuite = camera.CryptoDisabled
 					}
 				}
 				log.Printf("[homekit] SRTP selected crypto: %d", c.SRTPCryptoSuite)
