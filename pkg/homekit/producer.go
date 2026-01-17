@@ -309,7 +309,12 @@ func (c *Client) sendInitialRTCP(session *srtp.Session) {
 	if session == nil || session.Remote == nil || session.Conn() == nil {
 		return
 	}
-	rr := &rtcp.ReceiverReport{SSRC: session.Local.SSRC}
+	rr := &rtcp.ReceiverReport{
+		SSRC: session.Local.SSRC,
+		Reports: []rtcp.ReceptionReport{
+			{SSRC: session.Remote.SSRC},
+		},
+	}
 	if _, err := session.WriteRTCP(rr); err != nil {
 		log.Printf("[homekit] SRTP initial RTCP error: %v", err)
 		return
