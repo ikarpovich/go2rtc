@@ -115,6 +115,10 @@ func (c *Client) startHDS() error {
 	maxBackoff := 30 * time.Second
 	for {
 		producer.resetForReconnect()
+		if producer.videoTrack != nil && producer.videoTrack.Senders() == nil {
+			log.Printf("[homekit] HDS: no consumers, stopping")
+			return nil
+		}
 
 		if err := c.hap.Dial(); err != nil {
 			log.Printf("[homekit] HDS: re-dial failed: %v", err)
