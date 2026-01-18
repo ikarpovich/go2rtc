@@ -22,6 +22,7 @@ type Demuxer struct {
 	// Track information
 	trackID      uint32
 	timeScale    uint32
+	timeScales   map[uint32]uint32
 	naluLen      int
 	loggedOffset bool
 	loggedSample bool
@@ -50,22 +51,41 @@ func (d *Demuxer) SetInit(data []byte) error {
 		return fmt.Errorf("failed to decode init atoms: %w", err)
 	}
 
+	if d.timeScales == nil {
+		d.timeScales = make(map[uint32]uint32)
+	}
+
+	var currentTrackID uint32
 	for _, atom := range atoms {
 		switch a := atom.(type) {
 		case *iso.AtomTkhd:
-			d.trackID = a.TrackID
+			currentTrackID = a.TrackID
 		case *iso.AtomMdhd:
-			d.timeScale = a.TimeScale
+			if currentTrackID != 0 {
+				d.timeScales[currentTrackID] = a.TimeScale
+			}
 		case *iso.AtomVideo:
 			switch a.Name {
 			case "avc1":
 				d.VideoCodec = "h264"
+				if currentTrackID != 0 {
+					d.trackID = currentTrackID
+					if ts := d.timeScales[currentTrackID]; ts != 0 {
+						d.timeScale = ts
+					}
+				}
 				// Parse avcC box to extract SPS/PPS
 				if err := d.parseAVCC(a.Config); err != nil {
 					return fmt.Errorf("failed to parse avcC: %w", err)
 				}
 			case "hev1", "hvc1":
 				d.VideoCodec = "h265"
+				if currentTrackID != 0 {
+					d.trackID = currentTrackID
+					if ts := d.timeScales[currentTrackID]; ts != 0 {
+						d.timeScale = ts
+					}
+				}
 				// Parse hvcC box to extract VPS/SPS/PPS
 				if err := d.parseHVCC(a.Config); err != nil {
 					return fmt.Errorf("failed to parse hvcC: %w", err)
@@ -303,6 +323,12 @@ func (d *Demuxer) Demux(data []byte) error {
 		videoDefaultSampleSize = best.defaultSampleSize
 		if best.trackID != 0 {
 			d.trackID = best.trackID
+		}
+	}
+
+	if d.trackID != 0 {
+		if ts := d.timeScales[d.trackID]; ts != 0 {
+			d.timeScale = ts
 		}
 	}
 
