@@ -466,7 +466,10 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 	}
 
 	for _, nalu := range nalus {
-		switch h264.NALUType(nalu) {
+		if len(nalu) == 0 {
+			continue
+		}
+		switch nalu[0] & 0x1F {
 		case h264.NALUTypeSPS:
 			if p.pendingHasSPS {
 				continue
