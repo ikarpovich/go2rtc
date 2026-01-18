@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
+	"github.com/AlexxIT/go2rtc/pkg/h264"
 	"github.com/AlexxIT/go2rtc/pkg/hap"
 	"github.com/AlexxIT/go2rtc/pkg/hap/camera"
 	"github.com/AlexxIT/go2rtc/pkg/hap/hds"
@@ -31,6 +32,12 @@ type HDSProducer struct {
 	helloID   int64
 
 	loggedData bool
+
+	pendingPayload []byte
+	pendingPTS     uint64
+	pendingKey     bool
+	pendingHasSPS  bool
+	pendingHasPPS  bool
 }
 
 // startHDS initiates HDS streaming mode
@@ -445,26 +452,60 @@ func (p *HDSProducer) processMessages() error {
 
 // handleVideoFrame is called by the demuxer for each decoded frame
 func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts uint64) {
-	// Convert NALUs to AVCC format and send as single RTP packet
-	// This matches the pattern used in pkg/magic/bitstream/producer.go
-	payload := make([]byte, 0, 64*1024)
+	// Combine NALUs with the same PTS into one access unit before sending.
+	if len(p.pendingPayload) > 0 && pts != p.pendingPTS {
+		p.flushPending()
+	}
+	if len(p.pendingPayload) == 0 {
+		p.pendingPTS = pts
+		p.pendingKey = keyframe
+		p.pendingHasSPS = false
+		p.pendingHasPPS = false
+	} else if keyframe {
+		p.pendingKey = true
+	}
+
 	for _, nalu := range nalus {
+		switch h264.NALUType(nalu) {
+		case h264.NALUTypeSPS:
+			if p.pendingHasSPS {
+				continue
+			}
+			p.pendingHasSPS = true
+		case h264.NALUTypePPS:
+			if p.pendingHasPPS {
+				continue
+			}
+			p.pendingHasPPS = true
+		}
+
 		// AVCC format: 4-byte length + NALU
-		payload = append(payload, byte(len(nalu)>>24), byte(len(nalu)>>16), byte(len(nalu)>>8), byte(len(nalu)))
-		payload = append(payload, nalu...)
+		p.pendingPayload = append(p.pendingPayload, byte(len(nalu)>>24), byte(len(nalu)>>16), byte(len(nalu)>>8), byte(len(nalu)))
+		p.pendingPayload = append(p.pendingPayload, nalu...)
+	}
+}
+
+func (p *HDSProducer) flushPending() {
+	if len(p.pendingPayload) == 0 {
+		return
 	}
 
 	pkt := &rtp.Packet{
-		Header:  rtp.Header{Timestamp: uint32(pts)},
-		Payload: payload,
+		Header:  rtp.Header{Timestamp: uint32(p.pendingPTS)},
+		Payload: p.pendingPayload,
 	}
 
-	if keyframe {
-		log.Printf("[homekit] HDS: keyframe nalus=%d, pts=%d, size=%d bytes", len(nalus), pts, len(payload))
+	if p.pendingKey {
+		log.Printf("[homekit] HDS: keyframe pts=%d, size=%d bytes", p.pendingPTS, len(p.pendingPayload))
 	}
 
 	p.videoTrack.WriteRTP(pkt)
 	p.client.Recv += len(pkt.Payload)
+
+	p.pendingPayload = nil
+	p.pendingKey = false
+	p.pendingHasSPS = false
+	p.pendingHasPPS = false
 }
 
 func mapKeys(m map[string]any) []string {
