@@ -113,6 +113,9 @@ func (d *hdsMP4FFDemuxer) SetInit(data []byte) error {
 			d.trex = trex
 		}
 	}
+	if d.trex == nil {
+		d.trex = &mp4.TrexBox{TrackID: d.trackID}
+	}
 	d.baseTime = 0
 
 	return nil
@@ -135,103 +138,79 @@ func (d *hdsMP4FFDemuxer) Demux(data []byte) error {
 			if frag.Moof == nil || frag.Mdat == nil {
 				continue
 			}
-			for _, traf := range frag.Moof.Trafs {
-				if traf.Tfhd == nil || traf.Tfhd.TrackID != d.trackID {
-					continue
-				}
-				tfhd := traf.Tfhd
-				baseOffset := uint64(0)
-				if tfhd.HasBaseDataOffset() {
-					baseOffset = tfhd.BaseDataOffset
-				} else if tfhd.DefaultBaseIfMoof() {
-					baseOffset = frag.Moof.StartPos
-				}
-				for _, trun := range traf.Truns {
-					if trun == nil {
+			samples, err := frag.GetFullSamples(d.trex)
+			if err != nil {
+				return err
+			}
+			if !d.loggedSampleMap {
+				minDur, maxDur := uint32(0), uint32(0)
+				zeroDur := 0
+				for _, s := range samples {
+					if s.Dur == 0 {
+						zeroDur++
 						continue
 					}
-					_ = trun.AddSampleDefaultValues(tfhd, d.trex)
-					off := baseOffset
-					if trun.HasDataOffset() {
-						off = uint64(int64(off) + int64(trun.DataOffset))
+					if minDur == 0 || s.Dur < minDur {
+						minDur = s.Dur
 					}
-					offsetInMdat := uint32(0)
-					if off >= frag.Mdat.PayloadAbsoluteOffset() {
-						offsetInMdat = uint32(off - frag.Mdat.PayloadAbsoluteOffset())
-					}
-
-					samples := trun.GetFullSamples(offsetInMdat, traf.Tfdt.BaseMediaDecodeTime(), frag.Mdat)
-					if !d.loggedSampleMap {
-						minDur, maxDur := uint32(0), uint32(0)
-						zeroDur := 0
-						for _, s := range samples {
-							if s.Dur == 0 {
-								zeroDur++
-								continue
-							}
-							if minDur == 0 || s.Dur < minDur {
-								minDur = s.Dur
-							}
-							if s.Dur > maxDur {
-								maxDur = s.Dur
-							}
-						}
-						log.Printf("[homekit] HDS: trun samples=%d hasDur=%v zeroDur=%d minDur=%d maxDur=%d",
-							len(samples), trun.HasSampleDuration(), zeroDur, minDur, maxDur)
-						d.loggedSampleMap = true
-					}
-					for _, sample := range samples {
-						if len(sample.Data) == 0 {
-							continue
-						}
-						decodeTime := sample.DecodeTime
-						if d.baseTime == 0 {
-							d.baseTime = decodeTime
-						}
-						if decodeTime >= d.baseTime {
-							decodeTime -= d.baseTime
-						}
-
-						presTime := sample.PresentationTime()
-						if presTime < 0 {
-							presTime = int64(decodeTime)
-						}
-						if d.baseTime != 0 && presTime >= int64(d.baseTime) {
-							presTime -= int64(d.baseTime)
-						}
-
-						pts := uint64(presTime)
-						dts := decodeTime
-						if d.timeScale != 0 && d.timeScale != 90000 {
-							pts = pts * 90000 / uint64(d.timeScale)
-							dts = dts * 90000 / uint64(d.timeScale)
-						}
-						if d.fallbackDur90 == 0 && sample.Dur > 0 && d.timeScale != 0 {
-							d.fallbackDur90 = uint64(sample.Dur) * 90000 / uint64(d.timeScale)
-						}
-						if d.fallbackDur90 == 0 {
-							d.fallbackDur90 = 90000 / 30
-						}
-						if d.lastDTS90 > 0 && dts <= d.lastDTS90 {
-							dts = d.lastDTS90 + d.fallbackDur90
-						}
-						if d.lastPTS90 > 0 && pts <= d.lastPTS90 {
-							pts = d.lastPTS90 + d.fallbackDur90
-						}
-						if pts < dts {
-							pts = dts
-						}
-						d.lastDTS90 = dts
-						d.lastPTS90 = pts
-
-						nalus, err := splitAVCC(sample.Data)
-						if err != nil {
-							continue
-						}
-						key := sample.IsSync()
-						d.onFrame(nalus, key, pts, dts)
+					if s.Dur > maxDur {
+						maxDur = s.Dur
 					}
 				}
+				log.Printf("[homekit] HDS: samples=%d zeroDur=%d minDur=%d maxDur=%d",
+					len(samples), zeroDur, minDur, maxDur)
+				d.loggedSampleMap = true
+			}
+			for _, sample := range samples {
+				if len(sample.Data) == 0 {
+					continue
+				}
+				decodeTime := sample.DecodeTime
+				if d.baseTime == 0 {
+					d.baseTime = decodeTime
+				}
+				if decodeTime >= d.baseTime {
+					decodeTime -= d.baseTime
+				}
+
+				presTime := sample.PresentationTime()
+				if presTime < 0 {
+					presTime = int64(decodeTime)
+				}
+				if d.baseTime != 0 && presTime >= int64(d.baseTime) {
+					presTime -= int64(d.baseTime)
+				}
+
+				pts := uint64(presTime)
+				dts := decodeTime
+				if d.timeScale != 0 && d.timeScale != 90000 {
+					pts = pts * 90000 / uint64(d.timeScale)
+					dts = dts * 90000 / uint64(d.timeScale)
+				}
+				if d.fallbackDur90 == 0 && sample.Dur > 0 && d.timeScale != 0 {
+					d.fallbackDur90 = uint64(sample.Dur) * 90000 / uint64(d.timeScale)
+				}
+				if d.fallbackDur90 == 0 {
+					d.fallbackDur90 = 90000 / 30
+				}
+				if d.lastDTS90 > 0 && dts <= d.lastDTS90 {
+					dts = d.lastDTS90 + d.fallbackDur90
+				}
+				if d.lastPTS90 > 0 && pts <= d.lastPTS90 {
+					pts = d.lastPTS90 + d.fallbackDur90
+				}
+				if pts < dts {
+					pts = dts
+				}
+				d.lastDTS90 = dts
+				d.lastPTS90 = pts
+
+				nalus, err := splitAVCC(sample.Data)
+				if err != nil {
+					continue
+				}
+				key := sample.IsSync()
+				d.onFrame(nalus, key, pts, dts)
 			}
 		}
 	}
