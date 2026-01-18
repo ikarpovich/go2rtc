@@ -79,6 +79,7 @@ func (c *Client) startHDS() error {
 	}
 
 	log.Printf("[homekit] HDS: video track codec=%s", producer.videoTrack.Codec.Name)
+	producer.videoTrack.Codec.PayloadType = core.PayloadTypeRAW
 
 	// Setup fMP4 demuxer
 	producer.demuxer = fmp4.NewDemuxer()
