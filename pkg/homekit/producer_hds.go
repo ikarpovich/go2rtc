@@ -68,6 +68,10 @@ func (c *Client) startHDS() error {
 		return fmt.Errorf("failed to get accessory: %w", err)
 	}
 
+	if err := c.applyRecordingConfig(acc); err != nil {
+		log.Printf("[homekit] HDS: recording config not applied: %v", err)
+	}
+
 	// Check for HDS support and read supported configurations
 	char := acc.GetCharacter(camera.TypeSupportedDataStreamTransportConfiguration)
 	if char == nil {
@@ -122,6 +126,76 @@ func (c *Client) startHDS() error {
 
 	// Process HDS messages (will request stream after hello)
 	return producer.processMessages()
+}
+
+func (c *Client) applyRecordingConfig(acc *hap.Accessory) error {
+	char := acc.GetCharacter(camera.TypeSupportedCameraRecordingConfiguration)
+	if char == nil {
+		return nil
+	}
+	var general camera.SupportedCameraRecordingConfiguration
+	if err := char.ReadTLV8(&general); err != nil {
+		return fmt.Errorf("read supported camera recording config: %w", err)
+	}
+
+	char = acc.GetCharacter(camera.TypeSupportedVideoRecordingConfiguration)
+	if char == nil {
+		return nil
+	}
+	var video camera.SupportedVideoRecordingConfiguration
+	if err := char.ReadTLV8(&video); err != nil {
+		return fmt.Errorf("read supported video recording config: %w", err)
+	}
+	if len(video.CodecConfigs) == 0 {
+		return nil
+	}
+	bestVideo := video.CodecConfigs[0]
+	bestArea := uint32(bestVideo.CodecAttrs.Width) * uint32(bestVideo.CodecAttrs.Height)
+	bestFPS := bestVideo.CodecAttrs.Framerate
+	for _, cfg := range video.CodecConfigs[1:] {
+		area := uint32(cfg.CodecAttrs.Width) * uint32(cfg.CodecAttrs.Height)
+		if area > bestArea || (area == bestArea && cfg.CodecAttrs.Framerate > bestFPS) {
+			bestArea = area
+			bestFPS = cfg.CodecAttrs.Framerate
+			bestVideo = cfg
+		}
+	}
+	log.Printf("[homekit] HDS: selected recording video width=%d height=%d fps=%d",
+		bestVideo.CodecAttrs.Width, bestVideo.CodecAttrs.Height, bestVideo.CodecAttrs.Framerate)
+
+	var audio camera.SupportedAudioRecordingConfiguration
+	var bestAudio camera.AudioRecordingCodecConfiguration
+	hasAudio := false
+	char = acc.GetCharacter(camera.TypeSupportedAudioRecordingConfiguration)
+	if char != nil {
+		if err := char.ReadTLV8(&audio); err == nil && len(audio.CodecConfigs) > 0 {
+			bestAudio = audio.CodecConfigs[0]
+			hasAudio = true
+		}
+	}
+	selected := camera.SelectedCameraRecordingConfiguration{
+		GeneralConfig: general,
+		VideoConfig: camera.SupportedVideoRecordingConfiguration{
+			CodecConfigs: []camera.VideoRecordingCodecConfiguration{bestVideo},
+		},
+	}
+	if hasAudio {
+		selected.AudioConfig = camera.SupportedAudioRecordingConfiguration{
+			CodecConfigs: []camera.AudioRecordingCodecConfiguration{bestAudio},
+		}
+	}
+
+	char = acc.GetCharacter(camera.TypeSelectedCameraRecordingConfiguration)
+	if char == nil {
+		return nil
+	}
+	if err := char.Write(selected); err != nil {
+		return fmt.Errorf("write selected camera recording config: %w", err)
+	}
+	if err := c.hap.PutCharacters(char); err != nil {
+		return fmt.Errorf("put selected camera recording config: %w", err)
+	}
+	return nil
 }
 
 // setupHDSTransport sets up the HDS TCP connection
