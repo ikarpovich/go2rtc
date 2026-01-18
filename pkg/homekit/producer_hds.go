@@ -163,6 +163,21 @@ func (p *HDSProducer) resetForReconnect() {
 }
 
 func (c *Client) applyRecordingConfig(acc *hap.Accessory) error {
+	selectedChar := acc.GetCharacter(camera.TypeSelectedCameraRecordingConfiguration)
+	if selectedChar != nil {
+		var selected camera.SelectedCameraRecordingConfiguration
+		if err := selectedChar.ReadTLV8(&selected); err == nil {
+			if len(selected.VideoConfig.CodecConfigs) > 0 {
+				log.Printf("[homekit] HDS: selected recording config already set (width=%d height=%d fps=%d)",
+					selected.VideoConfig.CodecConfigs[0].CodecAttrs.Width,
+					selected.VideoConfig.CodecConfigs[0].CodecAttrs.Height,
+					selected.VideoConfig.CodecConfigs[0].CodecAttrs.Framerate,
+				)
+				return nil
+			}
+		}
+	}
+
 	char := acc.GetCharacter(camera.TypeSupportedCameraRecordingConfiguration)
 	if char == nil {
 		return nil
