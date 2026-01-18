@@ -423,7 +423,7 @@ func (p *HDSProducer) requestVideoStream() error {
 
 	body := map[string]any{
 		"streamId": streamID,
-		"target":   "home hub",
+		"target":   "controller",
 		"type":     "ipcamera.recording",
 	}
 
