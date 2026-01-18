@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
 	"github.com/AlexxIT/go2rtc/pkg/tcp"
@@ -122,6 +123,23 @@ func (c *Conn) Accept() error {
 					"Content-Type": {"application/sdp"},
 				},
 				Request: req,
+			}
+
+			for _, track := range c.Senders {
+				codec := track.Codec
+				if codec == nil || codec.Name != core.CodecH264 {
+					continue
+				}
+				if strings.Contains(codec.FmtpLine, "sprop-parameter-sets=") {
+					continue
+				}
+				deadline := time.Now().Add(1 * time.Second)
+				for time.Now().Before(deadline) {
+					if strings.Contains(codec.FmtpLine, "sprop-parameter-sets=") {
+						break
+					}
+					time.Sleep(25 * time.Millisecond)
+				}
 			}
 
 			// convert tracks to real output medias medias
