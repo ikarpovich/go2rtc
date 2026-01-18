@@ -723,10 +723,6 @@ func (c *Client) fetchHDSInit(videoMedia *core.Media, videoCodec *core.Codec, ti
 		if producer.hdsConn != nil {
 			_ = producer.hdsConn.Close()
 		}
-		if c.hap.Conn != nil {
-			_ = c.hap.Conn.Close()
-			c.hap.Conn = nil
-		}
 	}()
 
 	if err := producer.setupHDSTransport(); err != nil {
