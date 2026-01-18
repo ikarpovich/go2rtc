@@ -539,7 +539,7 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 	}
 	nalus, err := parseAVCCWithLen(sample, nlen)
 	if err == nil {
-		return append(nalus[:len(nalus):len(nalus)], nalus...), nil
+		return nalus, nil
 	}
 
 	// If parsing failed, try other length sizes as fallback.
