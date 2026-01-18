@@ -116,27 +116,27 @@ func (c *Client) startHDS() error {
 
 		// Setup HDS transport
 		if err := producer.setupHDSTransport(); err != nil {
-			return fmt.Errorf("failed to setup HDS transport: %w", err)
+			log.Printf("[homekit] HDS: setup transport failed: %v", err)
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
 
 		// Send hello and wait for the response before requesting a stream.
 		if err := producer.sendHello(); err != nil {
-			return fmt.Errorf("failed to send hello: %w", err)
+			log.Printf("[homekit] HDS: send hello failed: %v", err)
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
 
 		// Process HDS messages (will request stream after hello)
 		if err := producer.processMessages(); err != nil {
-			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "stream closed") {
-				log.Printf("[homekit] HDS: stream ended (%v), reconnecting", err)
-				if producer.hdsConn != nil {
-					_ = producer.hdsConn.Close()
-				}
-				time.Sleep(500 * time.Millisecond)
-				continue
+			log.Printf("[homekit] HDS: stream ended (%v), reconnecting", err)
+			if producer.hdsConn != nil {
+				_ = producer.hdsConn.Close()
 			}
-			return err
+			time.Sleep(500 * time.Millisecond)
+			continue
 		}
-		return nil
 	}
 }
 
@@ -424,7 +424,7 @@ func (p *HDSProducer) requestVideoStream() error {
 
 	body := map[string]any{
 		"streamId": streamID,
-		"target":   "controller",
+		"target":   "home hub",
 		"type":     "ipcamera.recording",
 	}
 
