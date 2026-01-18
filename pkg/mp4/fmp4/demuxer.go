@@ -34,6 +34,7 @@ type Demuxer struct {
 	loggedTrun   bool
 	lastDTS      uint64
 	lastDur      uint64
+	baseDecode   uint64
 
 	// Callback for decoded frames
 	onFrame func(nalus [][]byte, keyframe bool, pts, dts uint64)
@@ -413,6 +414,22 @@ func (d *Demuxer) Demux(data []byte) error {
 		if limit > 0 {
 			log.Printf("[fmp4] trun sizes head=%v", trun.SamplesSize[:limit])
 		}
+		if len(trun.SamplesDuration) > 0 {
+			limDur := len(trun.SamplesDuration)
+			if limDur > 8 {
+				limDur = 8
+			}
+			log.Printf("[fmp4] trun duration head=%v default=%d timescale=%d", trun.SamplesDuration[:limDur], videoDefaultSampleDur, d.timeScale)
+		} else {
+			log.Printf("[fmp4] trun duration head=[] default=%d timescale=%d", videoDefaultSampleDur, d.timeScale)
+		}
+		if len(trun.SamplesCTS) > 0 {
+			limCTS := len(trun.SamplesCTS)
+			if limCTS > 8 {
+				limCTS = 8
+			}
+			log.Printf("[fmp4] trun cts head=%v", trun.SamplesCTS[:limCTS])
+		}
 		d.loggedTrun = true
 	}
 
@@ -432,8 +449,16 @@ func (d *Demuxer) Demux(data []byte) error {
 		}
 	}
 
+	baseTime := decodeTime
+	if baseTime != 0 {
+		if d.baseDecode == 0 || baseTime < d.baseDecode {
+			d.baseDecode = baseTime
+		}
+		baseTime -= d.baseDecode
+	}
+
 	// Process each sample in the trun
-	return d.processSamples(trun, mdatData, decodeTime, sampleOffset, videoDefaultSampleDur, videoDefaultSampleFlag)
+	return d.processSamples(trun, mdatData, baseTime, sampleOffset, videoDefaultSampleDur, videoDefaultSampleFlag)
 }
 
 // processSamples extracts NAL units from mdat based on trun sample info
@@ -447,12 +472,6 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 		numSamples = len(trun.SamplesSize)
 	}
 	currentTime := baseTime
-	if d.lastDTS != 0 && currentTime <= d.lastDTS {
-		if d.lastDur == 0 {
-			d.lastDur = 1
-		}
-		currentTime = d.lastDTS + d.lastDur
-	}
 
 	for i := 0; i < numSamples; i++ {
 		var sampleSize uint32
@@ -502,35 +521,69 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 		} else if defaultSampleDur != 0 {
 			duration = defaultSampleDur
 		}
-		if duration == 0 {
-			duration = 1
+		maxDur := d.timeScale
+		if maxDur == 0 {
+			maxDur = 90000
+		}
+		if duration == 0 || duration > maxDur*2 {
+			duration = maxDur / 30
+			if duration == 0 {
+				duration = 1
+			}
 		}
 
-		var cts uint32
+		var cts int64
 		if len(trun.SamplesCTS) > i {
-			cts = trun.SamplesCTS[i]
+			cts = int64(trun.SamplesCTS[i])
+		}
+		maxCTS := int64(d.timeScale) * 2
+		if maxCTS == 0 {
+			maxCTS = 180000
+		}
+		if cts > maxCTS || cts < -maxCTS {
+			cts = 0
 		}
 
-		dts := currentTime
-		pts := currentTime + uint64(cts)
+		rawDTS := currentTime
+		var rawPTS uint64
+		if cts >= 0 {
+			rawPTS = currentTime + uint64(cts)
+		} else if uint64(-cts) <= currentTime {
+			rawPTS = currentTime - uint64(-cts)
+		} else {
+			rawPTS = currentTime
+		}
 
+		dts := rawDTS
+		pts := rawPTS
 		if d.timeScale != 0 && d.timeScale != 90000 {
 			dts = dts * 90000 / uint64(d.timeScale)
 			pts = pts * 90000 / uint64(d.timeScale)
 		}
 		if d.lastDTS != 0 && dts <= d.lastDTS {
-			dts = d.lastDTS + uint64(duration)
+			scaledDur := uint64(duration)
+			if d.timeScale != 0 && d.timeScale != 90000 {
+				scaledDur = scaledDur * 90000 / uint64(d.timeScale)
+			}
+			if scaledDur == 0 {
+				scaledDur = 1
+			}
+			dts = d.lastDTS + scaledDur
 			if pts < dts {
 				pts = dts
 			}
 		}
 		d.lastDTS = dts
-		d.lastDur = uint64(duration)
+		if d.timeScale != 0 && d.timeScale != 90000 {
+			d.lastDur = uint64(duration) * 90000 / uint64(d.timeScale)
+		} else {
+			d.lastDur = uint64(duration)
+		}
 
 		// Call frame callback
 		d.onFrame(nalus, keyframe, pts, dts)
 
-		currentTime = dts + uint64(duration)
+		currentTime += uint64(duration)
 	}
 
 	return nil

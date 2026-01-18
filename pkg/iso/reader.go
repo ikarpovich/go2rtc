@@ -52,13 +52,14 @@ type AtomTfdt struct {
 }
 
 type AtomTrun struct {
+	Version          byte
 	SamplesCount     uint32
 	DataOffset       uint32
 	FirstSampleFlags uint32
 	SamplesDuration  []uint32
 	SamplesSize      []uint32
 	SamplesFlags     []uint32
-	SamplesCTS       []uint32
+	SamplesCTS       []int32
 }
 
 func DecodeAtom(b []byte) (any, error) {
@@ -146,11 +147,11 @@ func DecodeAtom(b []byte) (any, error) {
 
 	case MoofTrafTrun:
 		rd := bits.NewReader(data)
-		_ = rd.ReadByte() // version
+		version := rd.ReadByte()
 		flags := rd.ReadUint24()
 		samples := rd.ReadUint32()
 
-		atom := &AtomTrun{SamplesCount: samples}
+		atom := &AtomTrun{Version: version, SamplesCount: samples}
 
 		if flags&TrunDataOffset != 0 {
 			atom.DataOffset = rd.ReadUint32()
@@ -170,7 +171,8 @@ func DecodeAtom(b []byte) (any, error) {
 				atom.SamplesFlags = append(atom.SamplesFlags, rd.ReadUint32())
 			}
 			if flags&TrunSampleCTS != 0 {
-				atom.SamplesCTS = append(atom.SamplesCTS, rd.ReadUint32())
+				u := rd.ReadUint32()
+				atom.SamplesCTS = append(atom.SamplesCTS, int32(u))
 			}
 		}
 
