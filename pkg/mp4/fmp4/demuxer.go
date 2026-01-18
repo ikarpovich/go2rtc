@@ -240,12 +240,14 @@ func (d *Demuxer) Demux(data []byte) error {
 		trun              *iso.AtomTrun
 		trackID           uint32
 		defaultSampleSize uint32
+		decodeTime        uint64
 	}
 
 	var trun *iso.AtomTrun
 	var mdatData []byte
 	var currentTrackID uint32
 	var currentDefaultSampleSize uint32
+	var currentDecodeTime uint64
 	var videoDefaultSampleSize uint32
 	var candidates []trunCandidate
 
@@ -254,6 +256,7 @@ func (d *Demuxer) Demux(data []byte) error {
 		case *iso.AtomTfhd:
 			currentTrackID = a.TrackID
 			currentDefaultSampleSize = a.SampleSize
+			currentDecodeTime = 0
 			// Track ID from init may not align with fragment track IDs for some cameras.
 			// If it differs, prefer the init value unless we don't have one.
 			if d.trackID == 0 {
@@ -263,12 +266,13 @@ func (d *Demuxer) Demux(data []byte) error {
 				videoDefaultSampleSize = a.SampleSize
 			}
 		case *iso.AtomTfdt:
-			decodeTime = a.DecodeTime
+			currentDecodeTime = a.DecodeTime
 		case *iso.AtomTrun:
 			candidates = append(candidates, trunCandidate{
 				trun:              a,
 				trackID:           currentTrackID,
 				defaultSampleSize: currentDefaultSampleSize,
+				decodeTime:        currentDecodeTime,
 			})
 		case *iso.AtomMdat:
 			mdatData = a.Data
@@ -307,6 +311,7 @@ func (d *Demuxer) Demux(data []byte) error {
 		if match.trun != nil && bestSize <= matchSize*2 {
 			trun = match.trun
 			videoDefaultSampleSize = match.defaultSampleSize
+			decodeTime = match.decodeTime
 		} else {
 			if match.trun != nil && !d.loggedTrack {
 				log.Printf("[fmp4] track id mismatch init=%d fragment=%d", d.trackID, best.trackID)
@@ -314,6 +319,7 @@ func (d *Demuxer) Demux(data []byte) error {
 			}
 			trun = best.trun
 			videoDefaultSampleSize = best.defaultSampleSize
+			decodeTime = best.decodeTime
 			if best.trackID != 0 && best.trackID != d.trackID {
 				d.trackID = best.trackID
 			}
@@ -321,6 +327,7 @@ func (d *Demuxer) Demux(data []byte) error {
 	} else {
 		trun = best.trun
 		videoDefaultSampleSize = best.defaultSampleSize
+		decodeTime = best.decodeTime
 		if best.trackID != 0 {
 			d.trackID = best.trackID
 		}
