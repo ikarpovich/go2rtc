@@ -41,6 +41,7 @@ type HDSProducer struct {
 	pendingHasSPS  bool
 	pendingHasPPS  bool
 	loggedKeyframe bool
+	loggedTypes    bool
 }
 
 // startHDS initiates HDS streaming mode
@@ -474,6 +475,19 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 		p.flushPending()
 	}
 	isKey := false
+	if !p.loggedTypes {
+		var types []byte
+		for _, nalu := range nalus {
+			if len(nalu) == 0 {
+				continue
+			}
+			types = append(types, nalu[0]&0x1F)
+		}
+		if len(types) > 0 {
+			log.Printf("[homekit] HDS: nalu types=%v", types)
+			p.loggedTypes = true
+		}
+	}
 	for _, nalu := range nalus {
 		if len(nalu) > 0 && (nalu[0]&0x1F) == h264.NALUTypeIFrame {
 			isKey = true
