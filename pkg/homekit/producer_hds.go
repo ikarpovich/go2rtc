@@ -116,6 +116,12 @@ func (c *Client) startHDS() error {
 		// Setup HDS transport
 		if err := producer.setupHDSTransport(); err != nil {
 			log.Printf("[homekit] HDS: setup transport failed: %v", err)
+			if strings.Contains(err.Error(), "closed network connection") ||
+				strings.Contains(err.Error(), "broken pipe") {
+				if dialErr := c.hap.Dial(); dialErr != nil {
+					log.Printf("[homekit] HDS: re-dial failed: %v", dialErr)
+				}
+			}
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
