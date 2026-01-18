@@ -725,7 +725,7 @@ func (c *Client) fetchHDSInit(timeout time.Duration) error {
 	}
 
 	deadline := time.Now().Add(timeout)
-	initSeq := uint64(0)
+	var initSeq int64
 	var initBuffer []byte
 	for time.Now().Before(deadline) {
 		if err := producer.hdsConn.SetReadDeadline(deadline); err != nil {
