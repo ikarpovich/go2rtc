@@ -261,6 +261,8 @@ func (d *Demuxer) Demux(data []byte) error {
 		trun              *iso.AtomTrun
 		trackID           uint32
 		defaultSampleSize uint32
+		defaultSampleDur  uint32
+		defaultSampleFlag uint32
 		decodeTime        uint64
 	}
 
@@ -268,8 +270,12 @@ func (d *Demuxer) Demux(data []byte) error {
 	var mdatData []byte
 	var currentTrackID uint32
 	var currentDefaultSampleSize uint32
+	var currentDefaultSampleDur uint32
+	var currentDefaultSampleFlag uint32
 	var currentDecodeTime uint64
 	var videoDefaultSampleSize uint32
+	var videoDefaultSampleDur uint32
+	var videoDefaultSampleFlag uint32
 	var candidates []trunCandidate
 
 	for _, atom := range atoms {
@@ -277,6 +283,8 @@ func (d *Demuxer) Demux(data []byte) error {
 		case *iso.AtomTfhd:
 			currentTrackID = a.TrackID
 			currentDefaultSampleSize = a.SampleSize
+			currentDefaultSampleDur = a.SampleDuration
+			currentDefaultSampleFlag = a.SampleFlags
 			currentDecodeTime = 0
 			// Track ID from init may not align with fragment track IDs for some cameras.
 			// If it differs, prefer the init value unless we don't have one.
@@ -286,6 +294,12 @@ func (d *Demuxer) Demux(data []byte) error {
 			if a.TrackID == d.trackID && a.SampleSize != 0 {
 				videoDefaultSampleSize = a.SampleSize
 			}
+			if a.TrackID == d.trackID && a.SampleDuration != 0 {
+				videoDefaultSampleDur = a.SampleDuration
+			}
+			if a.TrackID == d.trackID && a.SampleFlags != 0 {
+				videoDefaultSampleFlag = a.SampleFlags
+			}
 		case *iso.AtomTfdt:
 			currentDecodeTime = a.DecodeTime
 		case *iso.AtomTrun:
@@ -293,6 +307,8 @@ func (d *Demuxer) Demux(data []byte) error {
 				trun:              a,
 				trackID:           currentTrackID,
 				defaultSampleSize: currentDefaultSampleSize,
+				defaultSampleDur:  currentDefaultSampleDur,
+				defaultSampleFlag: currentDefaultSampleFlag,
 				decodeTime:        currentDecodeTime,
 			})
 		case *iso.AtomMdat:
@@ -332,6 +348,8 @@ func (d *Demuxer) Demux(data []byte) error {
 		if match.trun != nil && bestSize <= matchSize*2 {
 			trun = match.trun
 			videoDefaultSampleSize = match.defaultSampleSize
+			videoDefaultSampleDur = match.defaultSampleDur
+			videoDefaultSampleFlag = match.defaultSampleFlag
 			decodeTime = match.decodeTime
 		} else {
 			if match.trun != nil && !d.loggedTrack {
@@ -340,6 +358,8 @@ func (d *Demuxer) Demux(data []byte) error {
 			}
 			trun = best.trun
 			videoDefaultSampleSize = best.defaultSampleSize
+			videoDefaultSampleDur = best.defaultSampleDur
+			videoDefaultSampleFlag = best.defaultSampleFlag
 			decodeTime = best.decodeTime
 			if best.trackID != 0 && best.trackID != d.trackID {
 				d.trackID = best.trackID
@@ -348,6 +368,8 @@ func (d *Demuxer) Demux(data []byte) error {
 	} else {
 		trun = best.trun
 		videoDefaultSampleSize = best.defaultSampleSize
+		videoDefaultSampleDur = best.defaultSampleDur
+		videoDefaultSampleFlag = best.defaultSampleFlag
 		decodeTime = best.decodeTime
 		if best.trackID != 0 {
 			d.trackID = best.trackID
@@ -409,20 +431,28 @@ func (d *Demuxer) Demux(data []byte) error {
 	}
 
 	// Process each sample in the trun
-	return d.processSamples(trun, mdatData, decodeTime, sampleOffset)
+	return d.processSamples(trun, mdatData, decodeTime, sampleOffset, videoDefaultSampleDur, videoDefaultSampleFlag)
 }
 
 // processSamples extracts NAL units from mdat based on trun sample info
-func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint64, offset uint32) error {
+func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint64, offset uint32, defaultSampleDur, defaultSampleFlag uint32) error {
 	if len(trun.SamplesSize) == 0 {
 		return fmt.Errorf("no sample sizes in trun")
 	}
 
-	numSamples := len(trun.SamplesSize)
+	numSamples := int(trun.SamplesCount)
+	if numSamples == 0 {
+		numSamples = len(trun.SamplesSize)
+	}
 	currentTime := baseTime
 
 	for i := 0; i < numSamples; i++ {
-		sampleSize := trun.SamplesSize[i]
+		var sampleSize uint32
+		if len(trun.SamplesSize) > i {
+			sampleSize = trun.SamplesSize[i]
+		} else if len(trun.SamplesSize) > 0 {
+			sampleSize = trun.SamplesSize[len(trun.SamplesSize)-1]
+		}
 		if offset+sampleSize > uint32(len(mdat)) {
 			return fmt.Errorf("sample %d exceeds mdat bounds", i)
 		}
@@ -436,6 +466,8 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 			sampleFlags = trun.FirstSampleFlags
 		} else if len(trun.SamplesFlags) > i {
 			sampleFlags = trun.SamplesFlags[i]
+		} else if defaultSampleFlag != 0 {
+			sampleFlags = defaultSampleFlag
 		}
 
 		keyframe := (sampleFlags & iso.SampleVideoNonIFrame) == 0
@@ -459,6 +491,8 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 		var duration uint32
 		if len(trun.SamplesDuration) > i {
 			duration = trun.SamplesDuration[i]
+		} else if defaultSampleDur != 0 {
+			duration = defaultSampleDur
 		}
 
 		var cts uint32

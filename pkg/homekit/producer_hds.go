@@ -580,6 +580,9 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 	} else if isKey {
 		p.pendingKey = true
 	}
+	if pts == p.pendingPTS && dts < p.pendingDTS {
+		p.pendingDTS = dts
+	}
 
 	for _, nalu := range nalus {
 		if len(nalu) == 0 {
@@ -609,8 +612,12 @@ func (p *HDSProducer) flushPending() {
 		return
 	}
 
+	ts := p.pendingPTS
+	if p.pendingDTS != 0 {
+		ts = p.pendingDTS
+	}
 	pkt := &rtp.Packet{
-		Header:  rtp.Header{Timestamp: uint32(p.pendingPTS), ExtensionProfile: hdsCTS(p.pendingPTS, p.pendingDTS)},
+		Header:  rtp.Header{Timestamp: uint32(ts), ExtensionProfile: hdsCTS(p.pendingPTS, p.pendingDTS)},
 		Payload: p.pendingPayload,
 	}
 
