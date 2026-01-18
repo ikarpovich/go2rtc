@@ -42,6 +42,7 @@ type HDSProducer struct {
 	pendingHasPPS  bool
 	loggedKeyframe bool
 	loggedTypes    bool
+	loggedPrefix   bool
 }
 
 // startHDS initiates HDS streaming mode
@@ -554,6 +555,14 @@ func (p *HDSProducer) flushPending() {
 			log.Printf("[homekit] HDS: keyframe payload missing IDR")
 			p.loggedKeyframe = true
 		}
+	}
+	if !p.loggedPrefix {
+		prefix := p.pendingPayload
+		if len(prefix) > 16 {
+			prefix = prefix[:16]
+		}
+		log.Printf("[homekit] HDS: payload prefix=%x", prefix)
+		p.loggedPrefix = true
 	}
 
 	p.videoTrack.WriteRTP(pkt)
