@@ -595,30 +595,9 @@ func (p *HDSProducer) processMessages() error {
 					initBuffer = append(initBuffer, data...)
 
 					if meta.IsLastDataChunk {
-						log.Printf("[homekit] HDS: received init segment (%d bytes)", len(initBuffer))
-						if err := p.demuxer.SetInit(initBuffer); err != nil {
+						if err := p.applyInitSegment(initBuffer); err != nil {
 							return fmt.Errorf("failed to set init segment: %w", err)
 						}
-						sps := p.demuxer.SPS()
-						pps := p.demuxer.PPS()
-						log.Printf("[homekit] HDS: SPS=%d bytes, PPS=%d bytes", len(sps), len(pps))
-						if p.videoTrack != nil && len(sps) > 0 && len(pps) > 0 {
-							sps = stripStartCode(sps)
-							pps = stripStartCode(pps)
-							avcc := make([]byte, 0, len(sps)+len(pps)+8)
-							avcc = append(avcc, 0, 0, 0, 0)
-							binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(sps)))
-							avcc = append(avcc, sps...)
-							avcc = append(avcc, 0, 0, 0, 0)
-							binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(pps)))
-							avcc = append(avcc, pps...)
-							updateCodecFromAVCC(p.videoTrack.Codec, avcc)
-							if !strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
-								p.videoTrack.Codec.FmtpLine = h264.GetFmtpLine(avcc)
-							}
-							log.Printf("[homekit] HDS: fmtp=%s", p.videoTrack.Codec.FmtpLine)
-						}
-						p.dumpInit(initBuffer)
 						initBuffer = nil
 					}
 					continue
@@ -660,6 +639,155 @@ func (p *HDSProducer) processMessages() error {
 			return fmt.Errorf("stream closed by accessory")
 		}
 	}
+}
+
+func (p *HDSProducer) applyInitSegment(initBuffer []byte) error {
+	log.Printf("[homekit] HDS: received init segment (%d bytes)", len(initBuffer))
+	if err := p.demuxer.SetInit(initBuffer); err != nil {
+		return err
+	}
+	sps := p.demuxer.SPS()
+	pps := p.demuxer.PPS()
+	log.Printf("[homekit] HDS: SPS=%d bytes, PPS=%d bytes", len(sps), len(pps))
+	if p.videoTrack != nil && len(sps) > 0 && len(pps) > 0 {
+		sps = stripStartCode(sps)
+		pps = stripStartCode(pps)
+		avcc := make([]byte, 0, len(sps)+len(pps)+8)
+		avcc = append(avcc, 0, 0, 0, 0)
+		binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(sps)))
+		avcc = append(avcc, sps...)
+		avcc = append(avcc, 0, 0, 0, 0)
+		binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(pps)))
+		avcc = append(avcc, pps...)
+		updateCodecFromAVCC(p.videoTrack.Codec, avcc)
+		if !strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
+			p.videoTrack.Codec.FmtpLine = h264.GetFmtpLine(avcc)
+		}
+		log.Printf("[homekit] HDS: fmtp=%s", p.videoTrack.Codec.FmtpLine)
+	}
+	p.dumpInit(initBuffer)
+	return nil
+}
+
+func (c *Client) prefetchHDSInit() {
+	c.hdsInitOnce.Do(func() {
+		videoTrack := c.trackByKind(core.KindVideo)
+		if videoTrack == nil || videoTrack.Codec == nil {
+			return
+		}
+		if videoTrack.Codec.Name != core.CodecH264 ||
+			strings.Contains(videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
+			return
+		}
+		acc, err := c.hap.GetFirstAccessory()
+		if err != nil {
+			c.hdsInitErr = err
+			return
+		}
+		if acc.GetCharacter(camera.TypeSupportedDataStreamTransportConfiguration) == nil {
+			return
+		}
+		c.hdsInitErr = c.fetchHDSInit(2 * time.Second)
+		if c.hdsInitErr != nil {
+			log.Printf("[homekit] HDS: init prefetch failed: %v", c.hdsInitErr)
+		}
+	})
+}
+
+func (c *Client) fetchHDSInit(timeout time.Duration) error {
+	producer := &HDSProducer{
+		client:     c,
+		videoTrack: c.trackByKind(core.KindVideo),
+	}
+	if producer.videoTrack == nil {
+		return fmt.Errorf("no video track configured")
+	}
+	producer.resetForReconnect()
+
+	if err := c.hap.Dial(); err != nil {
+		return err
+	}
+	defer func() {
+		if producer.hdsConn != nil {
+			_ = producer.hdsConn.Close()
+		}
+		if c.hap.Conn != nil {
+			_ = c.hap.Conn.Close()
+			c.hap.Conn = nil
+		}
+	}()
+
+	if err := producer.setupHDSTransport(); err != nil {
+		return err
+	}
+	if err := producer.sendHello(); err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(timeout)
+	initSeq := uint64(0)
+	var initBuffer []byte
+	for time.Now().Before(deadline) {
+		if err := producer.hdsConn.SetReadDeadline(deadline); err != nil {
+			return err
+		}
+		msg, err := producer.hdsConn.ReadMessage()
+		if err != nil {
+			return err
+		}
+
+		switch {
+		case msg.IsResponse() && msg.Protocol == hds.ProtocolControl && msg.Topic == hds.TopicHello:
+			if msg.Status != 0 {
+				return fmt.Errorf("HDS hello failed with status %d", msg.Status)
+			}
+			if err := producer.requestVideoStream(); err != nil {
+				return err
+			}
+		case msg.IsResponse() && msg.Protocol == hds.ProtocolDataSend && msg.Topic == hds.TopicOpen:
+			if msg.Status != 0 {
+				return fmt.Errorf("HDS dataSend.open failed with status %d", msg.Status)
+			}
+		case msg.IsEvent() && msg.Protocol == hds.ProtocolDataSend && msg.Topic == hds.TopicData:
+			packetsAny, ok := msg.Body["packets"].([]any)
+			if !ok || len(packetsAny) == 0 {
+				continue
+			}
+			for _, packetAny := range packetsAny {
+				packet, ok := packetAny.(map[string]any)
+				if !ok {
+					continue
+				}
+				data, ok := packet["data"].([]byte)
+				if !ok {
+					continue
+				}
+				metadata, ok := packet["metadata"].(map[string]any)
+				if !ok {
+					continue
+				}
+				meta := hds.ParseDataSendMetadata(metadata)
+				if meta.DataType != hds.DataTypeMediaInit {
+					continue
+				}
+
+				if meta.DataSequenceNumber != initSeq {
+					initSeq = meta.DataSequenceNumber
+					capacity := int(meta.DataTotalSize)
+					if capacity == 0 {
+						capacity = len(data)
+					}
+					initBuffer = make([]byte, 0, capacity)
+				}
+				initBuffer = append(initBuffer, data...)
+				if meta.IsLastDataChunk {
+					return producer.applyInitSegment(initBuffer)
+				}
+			}
+		}
+	}
+
+	return fmt.Errorf("timeout waiting for HDS init")
 }
 
 // handleVideoFrame is called by the demuxer for each decoded frame

@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/AlexxIT/go2rtc/pkg/core"
@@ -40,6 +41,9 @@ type Client struct {
 	SRTPCryptoSuite byte   `json:"-"`
 	SRTPSplit       bool   `json:"-"`
 	SRTPLocalIP     string `json:"-"`
+
+	hdsInitOnce sync.Once
+	hdsInitErr  error
 }
 
 func Dial(rawURL string, server *srtp.Server) (*Client, error) {
@@ -113,6 +117,8 @@ func (c *Client) GetMedias() []*core.Media {
 			},
 		},
 	}
+
+	c.prefetchHDSInit()
 
 	return c.Medias
 }
