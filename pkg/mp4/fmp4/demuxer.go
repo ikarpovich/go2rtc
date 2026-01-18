@@ -570,9 +570,12 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 	if nlen < 1 || nlen > 4 {
 		nlen = 4
 	}
-	nalus, err := parseAVCCWithLen(sample, nlen)
-	if err == nil {
-		return nalus, nil
+	bestNal := [][]byte(nil)
+	bestScore := 0
+
+	if nal, score, err := parseAVCCWithLenScore(sample, nlen, d.VideoCodec); err == nil && score > bestScore {
+		bestNal = nal
+		bestScore = score
 	}
 
 	// If parsing failed, try other length sizes as fallback.
@@ -583,9 +586,15 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 		if alt == 0 || alt > 4 {
 			continue
 		}
-		if alts, altErr := parseAVCCWithLen(sample, alt); altErr == nil {
-			return alts, nil
+		nal, score, altErr := parseAVCCWithLenScore(sample, alt, d.VideoCodec)
+		if altErr == nil && score > bestScore {
+			bestNal = nal
+			bestScore = score
 		}
+	}
+
+	if bestScore > 0 {
+		return bestNal, nil
 	}
 
 	// If the payload contains start codes, fall back to AnnexB splitting.
@@ -605,11 +614,11 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 			prefix = prefix[:16]
 		}
 		log.Printf("[fmp4] nalu parse failed len=%d nlen=%d prefix=%s err=%v",
-			len(sample), nlen, hex.EncodeToString(prefix), err,
+			len(sample), nlen, hex.EncodeToString(prefix), fmt.Errorf("no valid AVCC length"),
 		)
 	}
 
-	return nil, err
+	return nil, fmt.Errorf("no valid AVCC length")
 }
 
 func isAnnexB(b []byte) bool {
@@ -658,6 +667,39 @@ func parseAVCCWithLen(sample []byte, nlen int) ([][]byte, error) {
 	}
 
 	return nalus, nil
+}
+
+func parseAVCCWithLenScore(sample []byte, nlen int, codec string) ([][]byte, int, error) {
+	nalus, err := parseAVCCWithLen(sample, nlen)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(nalus) == 0 {
+		return nil, 0, fmt.Errorf("empty nalu list")
+	}
+
+	score := 0
+	switch codec {
+	case "h264":
+		for _, nalu := range nalus {
+			if len(nalu) == 0 {
+				continue
+			}
+			typ := nalu[0] & 0x1F
+			switch typ {
+			case 1, 5, 6, 7, 8, 9:
+				score++
+			}
+		}
+	default:
+		// fallback: accept all
+		score = len(nalus)
+	}
+
+	if score == 0 {
+		return nil, 0, fmt.Errorf("no valid NALU types")
+	}
+	return nalus, score, nil
 }
 
 func splitAnnexB(b []byte) [][]byte {
