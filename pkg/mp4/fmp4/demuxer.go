@@ -556,27 +556,18 @@ func findFragmentOffsets(data []byte) (moofStart uint32, mdatStart uint32, okMoo
 func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 	var nalus [][]byte
 
-	// Annex B samples include start codes.
-	if containsStartCode(sample) {
-		for _, nalu := range splitAnnexB(sample) {
-			nalus = append(nalus, nalu)
-		}
-		return nalus, nil
-	}
-
 	// Extract NAL units from length-prefixed format
 	// Format: [len][NALU]... with len size from avcC/hvcC
 	nlen := d.naluLen
 	if nlen < 1 || nlen > 4 {
 		nlen = 4
 	}
+	if nal, err := parseAVCCStrict(sample, nlen, d.VideoCodec); err == nil {
+		return nal, nil
+	}
+
 	bestNal := [][]byte(nil)
 	bestScore := 0
-
-	if nal, score, err := parseAVCCWithLenScore(sample, nlen, d.VideoCodec); err == nil && score > bestScore {
-		bestNal = nal
-		bestScore = score
-	}
 
 	// If parsing failed, try other length sizes as fallback.
 	for _, alt := range []int{1, 2, 3, 4} {
@@ -597,8 +588,8 @@ func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 		return bestNal, nil
 	}
 
-	// If the payload contains start codes, fall back to AnnexB splitting.
-	if containsStartCode(sample) {
+	// If the payload starts with a start code, fall back to AnnexB splitting.
+	if isAnnexB(sample) {
 		for _, nalu := range splitAnnexB(sample) {
 			nalus = append(nalus, nalu)
 		}
@@ -700,6 +691,33 @@ func parseAVCCWithLenScore(sample []byte, nlen int, codec string) ([][]byte, int
 		return nil, 0, fmt.Errorf("no valid NALU types")
 	}
 	return nalus, score, nil
+}
+
+func parseAVCCStrict(sample []byte, nlen int, codec string) ([][]byte, error) {
+	nalus, err := parseAVCCWithLen(sample, nlen)
+	if err != nil {
+		return nil, err
+	}
+	if len(nalus) == 0 {
+		return nil, fmt.Errorf("empty nalu list")
+	}
+
+	switch codec {
+	case "h264":
+		for _, nalu := range nalus {
+			if len(nalu) == 0 {
+				return nil, fmt.Errorf("empty nalu")
+			}
+			typ := nalu[0] & 0x1F
+			switch typ {
+			case 1, 5, 6, 7, 8, 9:
+			default:
+				return nil, fmt.Errorf("invalid h264 nalu type %d", typ)
+			}
+		}
+	}
+
+	return nalus, nil
 }
 
 func splitAnnexB(b []byte) [][]byte {
