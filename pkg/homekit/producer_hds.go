@@ -110,28 +110,49 @@ func (c *Client) startHDS() error {
 	log.Printf("[homekit] HDS: video track codec=%s", producer.videoTrack.Codec.Name)
 	producer.videoTrack.Codec.PayloadType = core.PayloadTypeRAW
 
+	backoff := 500 * time.Millisecond
+	maxBackoff := 30 * time.Second
 	for {
 		producer.resetForReconnect()
 
 		if err := c.hap.Dial(); err != nil {
 			log.Printf("[homekit] HDS: re-dial failed: %v", err)
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
 			continue
 		}
 
 		// Setup HDS transport
 		if err := producer.setupHDSTransport(); err != nil {
 			log.Printf("[homekit] HDS: setup transport failed: %v", err)
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
 			continue
 		}
 
 		// Send hello and wait for the response before requesting a stream.
 		if err := producer.sendHello(); err != nil {
 			log.Printf("[homekit] HDS: send hello failed: %v", err)
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
 			continue
 		}
+		backoff = 500 * time.Millisecond
 
 		// Process HDS messages (will request stream after hello)
 		if err := producer.processMessages(); err != nil {
@@ -139,7 +160,13 @@ func (c *Client) startHDS() error {
 			if producer.hdsConn != nil {
 				_ = producer.hdsConn.Close()
 			}
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
 			continue
 		}
 	}
