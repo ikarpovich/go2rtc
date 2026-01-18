@@ -3,6 +3,7 @@ package mp4
 import (
 	"errors"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/AlexxIT/go2rtc/pkg/aac"
@@ -19,6 +20,7 @@ type Consumer struct {
 	muxer *Muxer
 	mu    sync.Mutex
 	start bool
+	ready chan struct{}
 
 	Rotate int `json:"-"`
 	ScaleX int `json:"-"`
@@ -57,6 +59,7 @@ func NewConsumer(medias []*core.Media) *Consumer {
 		},
 		muxer: &Muxer{},
 		wr:    wr,
+		ready: make(chan struct{}),
 	}
 }
 
@@ -73,7 +76,17 @@ func (c *Consumer) AddTrack(media *core.Media, _ *core.Codec, track *core.Receiv
 				if !h264.IsKeyframe(packet.Payload) {
 					return
 				}
+				if !strings.Contains(codec.FmtpLine, "sprop-parameter-sets=") {
+					codec.FmtpLine = h264.GetFmtpLine(packet.Payload)
+					if trackID < byte(len(c.muxer.codecs)) {
+						c.muxer.codecs[trackID].FmtpLine = codec.FmtpLine
+					}
+				}
 				c.start = true
+				if c.ready != nil {
+					close(c.ready)
+					c.ready = nil
+				}
 			}
 
 			// important to use Mutex because right fragment order
@@ -98,6 +111,10 @@ func (c *Consumer) AddTrack(media *core.Media, _ *core.Codec, track *core.Receiv
 					return
 				}
 				c.start = true
+				if c.ready != nil {
+					close(c.ready)
+					c.ready = nil
+				}
 			}
 
 			// important to use Mutex because right fragment order
@@ -167,6 +184,10 @@ func (c *Consumer) AddTrack(media *core.Media, _ *core.Codec, track *core.Receiv
 func (c *Consumer) WriteTo(wr io.Writer) (int64, error) {
 	if len(c.Senders) == 1 && c.Senders[0].Codec.IsAudio() {
 		c.start = true
+	}
+
+	if !c.start && c.ready != nil {
+		<-c.ready
 	}
 
 	init, err := c.muxer.GetInit()
