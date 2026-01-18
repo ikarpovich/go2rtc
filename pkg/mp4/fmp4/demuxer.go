@@ -23,6 +23,10 @@ type Demuxer struct {
 	trackID      uint32
 	timeScale    uint32
 	timeScales   map[uint32]uint32
+	spsByTrack   map[uint32][]byte
+	ppsByTrack   map[uint32][]byte
+	vpsByTrack   map[uint32][]byte
+	codecByTrack map[uint32]string
 	naluLen      int
 	loggedOffset bool
 	loggedSample bool
@@ -54,6 +58,12 @@ func (d *Demuxer) SetInit(data []byte) error {
 	if d.timeScales == nil {
 		d.timeScales = make(map[uint32]uint32)
 	}
+	if d.spsByTrack == nil {
+		d.spsByTrack = make(map[uint32][]byte)
+		d.ppsByTrack = make(map[uint32][]byte)
+		d.vpsByTrack = make(map[uint32][]byte)
+		d.codecByTrack = make(map[uint32]string)
+	}
 
 	var currentTrackID uint32
 	for _, atom := range atoms {
@@ -78,6 +88,11 @@ func (d *Demuxer) SetInit(data []byte) error {
 				if err := d.parseAVCC(a.Config); err != nil {
 					return fmt.Errorf("failed to parse avcC: %w", err)
 				}
+				if currentTrackID != 0 {
+					d.spsByTrack[currentTrackID] = append([]byte(nil), d.SPS...)
+					d.ppsByTrack[currentTrackID] = append([]byte(nil), d.PPS...)
+					d.codecByTrack[currentTrackID] = d.VideoCodec
+				}
 			case "hev1", "hvc1":
 				d.VideoCodec = "h265"
 				if currentTrackID != 0 {
@@ -89,6 +104,12 @@ func (d *Demuxer) SetInit(data []byte) error {
 				// Parse hvcC box to extract VPS/SPS/PPS
 				if err := d.parseHVCC(a.Config); err != nil {
 					return fmt.Errorf("failed to parse hvcC: %w", err)
+				}
+				if currentTrackID != 0 {
+					d.spsByTrack[currentTrackID] = append([]byte(nil), d.SPS...)
+					d.ppsByTrack[currentTrackID] = append([]byte(nil), d.PPS...)
+					d.vpsByTrack[currentTrackID] = append([]byte(nil), d.VPS...)
+					d.codecByTrack[currentTrackID] = d.VideoCodec
 				}
 			default:
 				return fmt.Errorf("unsupported video codec: %s", a.Name)
@@ -336,6 +357,18 @@ func (d *Demuxer) Demux(data []byte) error {
 	if d.trackID != 0 {
 		if ts := d.timeScales[d.trackID]; ts != 0 {
 			d.timeScale = ts
+		}
+		if codec := d.codecByTrack[d.trackID]; codec != "" {
+			d.VideoCodec = codec
+		}
+		if sps := d.spsByTrack[d.trackID]; len(sps) > 0 {
+			d.SPS = sps
+		}
+		if pps := d.ppsByTrack[d.trackID]; len(pps) > 0 {
+			d.PPS = pps
+		}
+		if vps := d.vpsByTrack[d.trackID]; len(vps) > 0 {
+			d.VPS = vps
 		}
 	}
 
