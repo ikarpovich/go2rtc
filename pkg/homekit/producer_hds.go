@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -408,6 +409,16 @@ func (p *HDSProducer) processMessages() error {
 						}
 						log.Printf("[homekit] HDS: codec=%s, SPS=%d bytes, PPS=%d bytes",
 							p.demuxer.VideoCodec, len(p.demuxer.SPS), len(p.demuxer.PPS))
+						if p.videoTrack != nil && p.videoTrack.Codec != nil && len(p.demuxer.SPS) > 0 && len(p.demuxer.PPS) > 0 {
+							if !strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
+								avcc := make([]byte, 0, len(p.demuxer.SPS)+len(p.demuxer.PPS)+8)
+								avcc = append(avcc, 0, 0, 0, byte(len(p.demuxer.SPS)))
+								avcc = append(avcc, p.demuxer.SPS...)
+								avcc = append(avcc, 0, 0, 0, byte(len(p.demuxer.PPS)))
+								avcc = append(avcc, p.demuxer.PPS...)
+								p.videoTrack.Codec.FmtpLine = h264.GetFmtpLine(avcc)
+							}
+						}
 						initBuffer = nil
 					}
 					continue
