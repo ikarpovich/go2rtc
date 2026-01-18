@@ -32,6 +32,8 @@ type Demuxer struct {
 	loggedSample bool
 	loggedTrack  bool
 	loggedTrun   bool
+	lastDTS      uint64
+	lastDur      uint64
 
 	// Callback for decoded frames
 	onFrame func(nalus [][]byte, keyframe bool, pts, dts uint64)
@@ -445,6 +447,12 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 		numSamples = len(trun.SamplesSize)
 	}
 	currentTime := baseTime
+	if d.lastDTS != 0 && currentTime <= d.lastDTS {
+		if d.lastDur == 0 {
+			d.lastDur = 1
+		}
+		currentTime = d.lastDTS + d.lastDur
+	}
 
 	for i := 0; i < numSamples; i++ {
 		var sampleSize uint32
@@ -494,6 +502,9 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 		} else if defaultSampleDur != 0 {
 			duration = defaultSampleDur
 		}
+		if duration == 0 {
+			duration = 1
+		}
 
 		var cts uint32
 		if len(trun.SamplesCTS) > i {
@@ -507,11 +518,19 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 			dts = dts * 90000 / uint64(d.timeScale)
 			pts = pts * 90000 / uint64(d.timeScale)
 		}
+		if d.lastDTS != 0 && dts <= d.lastDTS {
+			dts = d.lastDTS + uint64(duration)
+			if pts < dts {
+				pts = dts
+			}
+		}
+		d.lastDTS = dts
+		d.lastDur = uint64(duration)
 
 		// Call frame callback
 		d.onFrame(nalus, keyframe, pts, dts)
 
-		currentTime += uint64(duration)
+		currentTime = dts + uint64(duration)
 	}
 
 	return nil

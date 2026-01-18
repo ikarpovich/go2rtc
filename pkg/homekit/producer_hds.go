@@ -48,6 +48,9 @@ type HDSProducer struct {
 	loggedPrefix   bool
 
 	lastPTS         uint64
+	lastInputDTS    uint64
+	lastOutputDTS   uint64
+	frameDur        uint64
 	captureDir      string
 	captureSeconds  uint64
 	captureWindows  int
@@ -612,12 +615,33 @@ func (p *HDSProducer) flushPending() {
 		return
 	}
 
-	ts := p.pendingPTS
+	inDTS := p.pendingPTS
 	if p.pendingDTS != 0 {
-		ts = p.pendingDTS
+		inDTS = p.pendingDTS
 	}
+	inPTS := p.pendingPTS
+	if inPTS < inDTS {
+		inPTS = inDTS
+	}
+	if p.frameDur == 0 {
+		p.frameDur = 90000 / 30
+		if p.frameDur == 0 {
+			p.frameDur = 3000
+		}
+	}
+	var outDTS uint64
+	if p.lastInputDTS == 0 {
+		outDTS = inDTS
+	} else {
+		var delta int64 = int64(inDTS) - int64(p.lastInputDTS)
+		if delta <= 0 {
+			delta = int64(p.frameDur)
+		}
+		outDTS = p.lastOutputDTS + uint64(delta)
+	}
+	outPTS := outDTS + (inPTS - inDTS)
 	pkt := &rtp.Packet{
-		Header:  rtp.Header{Timestamp: uint32(ts), ExtensionProfile: hdsCTS(p.pendingPTS, p.pendingDTS)},
+		Header:  rtp.Header{Timestamp: uint32(outDTS), ExtensionProfile: hdsCTS(outPTS, outDTS)},
 		Payload: p.pendingPayload,
 	}
 
@@ -639,6 +663,8 @@ func (p *HDSProducer) flushPending() {
 
 	p.videoTrack.WriteRTP(pkt)
 	p.client.Recv += len(pkt.Payload)
+	p.lastInputDTS = inDTS
+	p.lastOutputDTS = outDTS
 
 	p.pendingPayload = nil
 	p.pendingKey = false
