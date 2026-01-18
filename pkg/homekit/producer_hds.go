@@ -496,12 +496,14 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 	}
 
 	if isKey && p.demuxer != nil {
+		head := make([][]byte, 0, 2+len(nalus))
 		if len(p.demuxer.SPS) > 0 {
-			nalus = append([][]byte{p.demuxer.SPS}, nalus...)
+			head = append(head, p.demuxer.SPS)
 		}
 		if len(p.demuxer.PPS) > 0 {
-			nalus = append([][]byte{p.demuxer.PPS}, nalus...)
+			head = append(head, p.demuxer.PPS)
 		}
+		nalus = append(head, nalus...)
 	}
 
 	if len(p.pendingPayload) == 0 {
