@@ -310,7 +310,6 @@ func (p *HDSProducer) requestVideoStream() error {
 		"streamId": streamID,
 		"target":   "controller",
 		"type":     "ipcamera.recording",
-		"reason":   "live",
 	}
 
 	return p.hdsConn.SendRequest(hds.ProtocolDataSend, hds.TopicOpen, id, body)
@@ -434,6 +433,8 @@ func (p *HDSProducer) processMessages() error {
 						log.Printf("[homekit] HDS: codec=%s, SPS=%d bytes, PPS=%d bytes",
 							p.demuxer.VideoCodec, len(p.demuxer.SPS), len(p.demuxer.PPS))
 						if p.videoTrack != nil && len(p.demuxer.SPS) > 0 && len(p.demuxer.PPS) > 0 {
+							p.demuxer.SPS = stripStartCode(p.demuxer.SPS)
+							p.demuxer.PPS = stripStartCode(p.demuxer.PPS)
 							avcc := make([]byte, 0, len(p.demuxer.SPS)+len(p.demuxer.PPS)+8)
 							avcc = append(avcc, 0, 0, 0, 0)
 							binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(p.demuxer.SPS)))
@@ -441,10 +442,11 @@ func (p *HDSProducer) processMessages() error {
 							avcc = append(avcc, 0, 0, 0, 0)
 							binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(p.demuxer.PPS)))
 							avcc = append(avcc, p.demuxer.PPS...)
-							p.videoTrack.Codec = h264.AVCCToCodec(avcc)
+							updateCodecFromAVCC(p.videoTrack.Codec, avcc)
 							if !strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
 								p.videoTrack.Codec.FmtpLine = h264.GetFmtpLine(avcc)
 							}
+							log.Printf("[homekit] HDS: fmtp=%s", p.videoTrack.Codec.FmtpLine)
 						}
 						p.dumpInit(initBuffer)
 						initBuffer = nil
@@ -493,23 +495,63 @@ func (p *HDSProducer) processMessages() error {
 // handleVideoFrame is called by the demuxer for each decoded frame
 func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts uint64) {
 	p.lastPTS = pts
+	if len(nalus) > 0 && p.videoTrack != nil {
+		for _, nalu := range nalus {
+			if len(nalu) == 0 {
+				continue
+			}
+			switch nalu[0] & 0x1F {
+			case h264.NALUTypeSPS:
+				if len(p.demuxer.SPS) == 0 {
+					p.demuxer.SPS = stripStartCode(nalu)
+				}
+			case h264.NALUTypePPS:
+				if len(p.demuxer.PPS) == 0 {
+					p.demuxer.PPS = stripStartCode(nalu)
+				}
+			}
+		}
+		if len(p.demuxer.SPS) > 0 && len(p.demuxer.PPS) > 0 &&
+			!strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
+			avcc := make([]byte, 0, len(p.demuxer.SPS)+len(p.demuxer.PPS)+8)
+			avcc = append(avcc, 0, 0, 0, 0)
+			binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(p.demuxer.SPS)))
+			avcc = append(avcc, p.demuxer.SPS...)
+			avcc = append(avcc, 0, 0, 0, 0)
+			binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(p.demuxer.PPS)))
+			avcc = append(avcc, p.demuxer.PPS...)
+			updateCodecFromAVCC(p.videoTrack.Codec, avcc)
+			if !strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
+				p.videoTrack.Codec.FmtpLine = h264.GetFmtpLine(avcc)
+			}
+			log.Printf("[homekit] HDS: fmtp (inband)=%s", p.videoTrack.Codec.FmtpLine)
+		}
+	}
 	// Combine NALUs with the same PTS into one access unit before sending.
 	if len(p.pendingPayload) > 0 && pts != p.pendingPTS {
 		p.flushPending()
 	}
 	isKey := false
 	if !p.loggedTypes {
-		var types []byte
+		var (
+			types  []byte
+			prefix []byte
+		)
 		for _, nalu := range nalus {
 			if len(nalu) == 0 {
 				continue
 			}
 			types = append(types, nalu[0]&0x1F)
+			if len(prefix) == 0 {
+				if len(nalu) > 8 {
+					prefix = nalu[:8]
+				} else {
+					prefix = nalu
+				}
+			}
 		}
-		if len(types) > 0 {
-			log.Printf("[homekit] HDS: nalu types=%v", types)
-			p.loggedTypes = true
-		}
+		log.Printf("[homekit] HDS: nalu count=%d types=%v prefix=%x sps=%d pps=%d", len(nalus), types, prefix, len(p.demuxer.SPS), len(p.demuxer.PPS))
+		p.loggedTypes = true
 	}
 	for _, nalu := range nalus {
 		if len(nalu) > 0 && (nalu[0]&0x1F) == h264.NALUTypeIFrame {
@@ -595,6 +637,27 @@ func (p *HDSProducer) flushPending() {
 	p.pendingKey = false
 	p.pendingHasSPS = false
 	p.pendingHasPPS = false
+}
+
+func stripStartCode(nalu []byte) []byte {
+	if len(nalu) >= 4 && nalu[0] == 0 && nalu[1] == 0 && nalu[2] == 0 && nalu[3] == 1 {
+		return nalu[4:]
+	}
+	if len(nalu) >= 3 && nalu[0] == 0 && nalu[1] == 0 && nalu[2] == 1 {
+		return nalu[3:]
+	}
+	return nalu
+}
+
+func updateCodecFromAVCC(codec *core.Codec, avcc []byte) {
+	if codec == nil {
+		return
+	}
+	next := h264.AVCCToCodec(avcc)
+	codec.Name = next.Name
+	codec.ClockRate = next.ClockRate
+	codec.PayloadType = next.PayloadType
+	codec.FmtpLine = next.FmtpLine
 }
 
 func hdsCTS(pts, dts uint64) uint16 {
