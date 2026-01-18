@@ -149,6 +149,10 @@ func (c *Client) applyRecordingConfig(acc *hap.Accessory) error {
 	if len(video.CodecConfigs) == 0 {
 		return nil
 	}
+	for i, cfg := range video.CodecConfigs {
+		log.Printf("[homekit] HDS: supported recording video[%d] width=%d height=%d fps=%d bitrate=%d",
+			i, cfg.CodecAttrs.Width, cfg.CodecAttrs.Height, cfg.CodecAttrs.Framerate, cfg.CodecParams.Bitrate)
+	}
 	bestVideo := video.CodecConfigs[0]
 	bestArea := uint32(bestVideo.CodecAttrs.Width) * uint32(bestVideo.CodecAttrs.Height)
 	bestFPS := bestVideo.CodecAttrs.Framerate
@@ -195,6 +199,7 @@ func (c *Client) applyRecordingConfig(acc *hap.Accessory) error {
 	if err := c.hap.PutCharacters(char); err != nil {
 		return fmt.Errorf("put selected camera recording config: %w", err)
 	}
+	log.Printf("[homekit] HDS: selected recording config applied")
 	return nil
 }
 
