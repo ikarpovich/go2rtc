@@ -19,7 +19,6 @@ import (
 	"github.com/AlexxIT/go2rtc/pkg/hap"
 	"github.com/AlexxIT/go2rtc/pkg/hap/camera"
 	"github.com/AlexxIT/go2rtc/pkg/hap/hds"
-	"github.com/AlexxIT/go2rtc/pkg/mp4/fmp4"
 	"github.com/pion/rtp"
 )
 
@@ -28,7 +27,7 @@ type HDSProducer struct {
 	client *Client
 
 	hdsConn *hds.Conn
-	demuxer *fmp4.Demuxer
+	demuxer hdsDemuxer
 
 	videoTrack *core.Receiver
 
@@ -107,8 +106,8 @@ func (c *Client) startHDS() error {
 	log.Printf("[homekit] HDS: video track codec=%s", producer.videoTrack.Codec.Name)
 	producer.videoTrack.Codec.PayloadType = core.PayloadTypeRAW
 
-	// Setup fMP4 demuxer
-	producer.demuxer = fmp4.NewDemuxer()
+	// Setup fMP4 demuxer (mp4ff-backed for HDS only)
+	producer.demuxer = newHDSMP4FFDemuxer()
 	producer.demuxer.SetOnFrame(producer.handleVideoFrame)
 
 	// Setup HDS transport
@@ -433,18 +432,19 @@ func (p *HDSProducer) processMessages() error {
 						if err := p.demuxer.SetInit(initBuffer); err != nil {
 							return fmt.Errorf("failed to set init segment: %w", err)
 						}
-						log.Printf("[homekit] HDS: codec=%s, SPS=%d bytes, PPS=%d bytes",
-							p.demuxer.VideoCodec, len(p.demuxer.SPS), len(p.demuxer.PPS))
-						if p.videoTrack != nil && len(p.demuxer.SPS) > 0 && len(p.demuxer.PPS) > 0 {
-							p.demuxer.SPS = stripStartCode(p.demuxer.SPS)
-							p.demuxer.PPS = stripStartCode(p.demuxer.PPS)
-							avcc := make([]byte, 0, len(p.demuxer.SPS)+len(p.demuxer.PPS)+8)
+						sps := p.demuxer.SPS()
+						pps := p.demuxer.PPS()
+						log.Printf("[homekit] HDS: SPS=%d bytes, PPS=%d bytes", len(sps), len(pps))
+						if p.videoTrack != nil && len(sps) > 0 && len(pps) > 0 {
+							sps = stripStartCode(sps)
+							pps = stripStartCode(pps)
+							avcc := make([]byte, 0, len(sps)+len(pps)+8)
 							avcc = append(avcc, 0, 0, 0, 0)
-							binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(p.demuxer.SPS)))
-							avcc = append(avcc, p.demuxer.SPS...)
+							binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(sps)))
+							avcc = append(avcc, sps...)
 							avcc = append(avcc, 0, 0, 0, 0)
-							binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(p.demuxer.PPS)))
-							avcc = append(avcc, p.demuxer.PPS...)
+							binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(pps)))
+							avcc = append(avcc, pps...)
 							updateCodecFromAVCC(p.videoTrack.Codec, avcc)
 							if !strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
 								p.videoTrack.Codec.FmtpLine = h264.GetFmtpLine(avcc)
@@ -505,24 +505,26 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 			}
 			switch nalu[0] & 0x1F {
 			case h264.NALUTypeSPS:
-				if len(p.demuxer.SPS) == 0 {
-					p.demuxer.SPS = stripStartCode(nalu)
+				if len(p.demuxer.SPS()) == 0 {
+					p.demuxer.SetSPS(stripStartCode(nalu))
 				}
 			case h264.NALUTypePPS:
-				if len(p.demuxer.PPS) == 0 {
-					p.demuxer.PPS = stripStartCode(nalu)
+				if len(p.demuxer.PPS()) == 0 {
+					p.demuxer.SetPPS(stripStartCode(nalu))
 				}
 			}
 		}
-		if len(p.demuxer.SPS) > 0 && len(p.demuxer.PPS) > 0 &&
+		if len(p.demuxer.SPS()) > 0 && len(p.demuxer.PPS()) > 0 &&
 			!strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
-			avcc := make([]byte, 0, len(p.demuxer.SPS)+len(p.demuxer.PPS)+8)
+			sps := p.demuxer.SPS()
+			pps := p.demuxer.PPS()
+			avcc := make([]byte, 0, len(sps)+len(pps)+8)
 			avcc = append(avcc, 0, 0, 0, 0)
-			binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(p.demuxer.SPS)))
-			avcc = append(avcc, p.demuxer.SPS...)
+			binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(sps)))
+			avcc = append(avcc, sps...)
 			avcc = append(avcc, 0, 0, 0, 0)
-			binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(p.demuxer.PPS)))
-			avcc = append(avcc, p.demuxer.PPS...)
+			binary.BigEndian.PutUint32(avcc[len(avcc)-4:], uint32(len(pps)))
+			avcc = append(avcc, pps...)
 			updateCodecFromAVCC(p.videoTrack.Codec, avcc)
 			if !strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
 				p.videoTrack.Codec.FmtpLine = h264.GetFmtpLine(avcc)
@@ -553,7 +555,7 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 				}
 			}
 		}
-		log.Printf("[homekit] HDS: nalu count=%d types=%v prefix=%x sps=%d pps=%d", len(nalus), types, prefix, len(p.demuxer.SPS), len(p.demuxer.PPS))
+		log.Printf("[homekit] HDS: nalu count=%d types=%v prefix=%x sps=%d pps=%d", len(nalus), types, prefix, len(p.demuxer.SPS()), len(p.demuxer.PPS()))
 		p.loggedTypes = true
 	}
 	for _, nalu := range nalus {
@@ -565,11 +567,11 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 
 	if isKey && p.demuxer != nil {
 		head := make([][]byte, 0, 2+len(nalus))
-		if len(p.demuxer.SPS) > 0 {
-			head = append(head, p.demuxer.SPS)
+		if len(p.demuxer.SPS()) > 0 {
+			head = append(head, p.demuxer.SPS())
 		}
-		if len(p.demuxer.PPS) > 0 {
-			head = append(head, p.demuxer.PPS)
+		if len(p.demuxer.PPS()) > 0 {
+			head = append(head, p.demuxer.PPS())
 		}
 		nalus = append(head, nalus...)
 	}

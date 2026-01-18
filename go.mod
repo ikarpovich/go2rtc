@@ -29,6 +29,7 @@ require (
 )
 
 require (
+	github.com/Eyevinn/mp4ff v0.50.0 // indirect
 	github.com/asticode/go-astikit v0.57.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
