@@ -164,6 +164,9 @@ func (c *Client) startHDS() error {
 			if producer.hdsConn != nil {
 				_ = producer.hdsConn.Close()
 			}
+			if strings.Contains(err.Error(), "status 6") || strings.Contains(err.Error(), "status 4") {
+				backoff = maxBackoff
+			}
 			if producer.hadFrames {
 				backoff = 500 * time.Millisecond
 			} else if backoff < maxBackoff {
