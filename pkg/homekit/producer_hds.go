@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -44,6 +46,15 @@ type HDSProducer struct {
 	loggedKeyframe bool
 	loggedTypes    bool
 	loggedPrefix   bool
+
+	lastPTS         uint64
+	captureDir      string
+	captureSeconds  uint64
+	captureWindows  int
+	captureIndex    int
+	captureStartPTS uint64
+	captureBuf      []byte
+	captureInitDone bool
 }
 
 // startHDS initiates HDS streaming mode
@@ -75,6 +86,13 @@ func (c *Client) startHDS() error {
 	// Setup HDS session
 	producer := &HDSProducer{
 		client: c,
+	}
+
+	producer.captureDir = "/tmp/go2rtc-hds-dumps"
+	producer.captureSeconds = 10
+	producer.captureWindows = 3
+	if err := os.MkdirAll(producer.captureDir, 0o755); err == nil {
+		log.Printf("[homekit] HDS: dumping raw fragments to %s", producer.captureDir)
 	}
 
 	// Get video track
@@ -428,6 +446,7 @@ func (p *HDSProducer) processMessages() error {
 								p.videoTrack.Codec.FmtpLine = h264.GetFmtpLine(avcc)
 							}
 						}
+						p.dumpInit(initBuffer)
 						initBuffer = nil
 					}
 					continue
@@ -452,6 +471,7 @@ func (p *HDSProducer) processMessages() error {
 
 					// Process complete fragment
 					if meta.IsLastDataChunk {
+						p.captureFragment(fragmentBuffer)
 						log.Printf("[homekit] HDS: demuxing fragment seq=%d (%d bytes)",
 							currentSeq, len(fragmentBuffer))
 						if err := p.demuxer.Demux(fragmentBuffer); err != nil {
@@ -472,6 +492,7 @@ func (p *HDSProducer) processMessages() error {
 
 // handleVideoFrame is called by the demuxer for each decoded frame
 func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts uint64) {
+	p.lastPTS = pts
 	// Combine NALUs with the same PTS into one access unit before sending.
 	if len(p.pendingPayload) > 0 && pts != p.pendingPTS {
 		p.flushPending()
@@ -585,6 +606,48 @@ func hdsCTS(pts, dts uint64) uint16 {
 		return 0
 	}
 	return uint16(diff)
+}
+
+func (p *HDSProducer) dumpInit(data []byte) {
+	if p.captureInitDone || p.captureDir == "" {
+		return
+	}
+	path := filepath.Join(p.captureDir, "init.bin")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		log.Printf("[homekit] HDS: dump init error: %v", err)
+		return
+	}
+	p.captureInitDone = true
+	log.Printf("[homekit] HDS: dumped init to %s", path)
+}
+
+func (p *HDSProducer) captureFragment(fragment []byte) {
+	if p.captureDir == "" || p.captureWindows <= 0 {
+		return
+	}
+	if p.lastPTS == 0 {
+		return
+	}
+	if p.captureStartPTS == 0 {
+		p.captureStartPTS = p.lastPTS
+		p.captureBuf = nil
+	}
+	p.captureBuf = append(p.captureBuf, fragment...)
+	if p.lastPTS-p.captureStartPTS < p.captureSeconds*90000 {
+		return
+	}
+	path := filepath.Join(p.captureDir, fmt.Sprintf("window-%d.bin", p.captureIndex))
+	if err := os.WriteFile(path, p.captureBuf, 0o644); err != nil {
+		log.Printf("[homekit] HDS: dump window error: %v", err)
+		return
+	}
+	log.Printf("[homekit] HDS: dumped window %d to %s", p.captureIndex, path)
+	p.captureIndex++
+	p.captureStartPTS = 0
+	p.captureBuf = nil
+	if p.captureIndex >= p.captureWindows {
+		p.captureWindows = 0
+	}
 }
 
 func mapKeys(m map[string]any) []string {
