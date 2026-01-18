@@ -69,10 +69,6 @@ func (c *Client) startHDS() error {
 		return fmt.Errorf("failed to get accessory: %w", err)
 	}
 
-	if err := c.applyRecordingConfig(acc); err != nil {
-		log.Printf("[homekit] HDS: recording config not applied: %v", err)
-	}
-
 	// Check for HDS support and read supported configurations
 	char := acc.GetCharacter(camera.TypeSupportedDataStreamTransportConfiguration)
 	if char == nil {
