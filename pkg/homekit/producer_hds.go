@@ -35,6 +35,7 @@ type HDSProducer struct {
 	helloID   int64
 
 	loggedData bool
+	hadFrames  bool
 
 	pendingPayload []byte
 	pendingPTS     uint64
@@ -152,7 +153,6 @@ func (c *Client) startHDS() error {
 			}
 			continue
 		}
-		backoff = 500 * time.Millisecond
 
 		// Process HDS messages (will request stream after hello)
 		if err := producer.processMessages(); err != nil {
@@ -160,13 +160,15 @@ func (c *Client) startHDS() error {
 			if producer.hdsConn != nil {
 				_ = producer.hdsConn.Close()
 			}
-			time.Sleep(backoff)
-			if backoff < maxBackoff {
+			if producer.hadFrames {
+				backoff = 500 * time.Millisecond
+			} else if backoff < maxBackoff {
 				backoff *= 2
 				if backoff > maxBackoff {
 					backoff = maxBackoff
 				}
 			}
+			time.Sleep(backoff)
 			continue
 		}
 	}
@@ -189,6 +191,7 @@ func (p *HDSProducer) resetForReconnect() {
 	p.loggedTypes = false
 	p.loggedKeyframe = false
 	p.loggedPrefix = false
+	p.hadFrames = false
 	p.captureInitDone = false
 	p.captureStartPTS = 0
 	p.captureIndex = 0
@@ -658,6 +661,7 @@ func (p *HDSProducer) processMessages() error {
 
 // handleVideoFrame is called by the demuxer for each decoded frame
 func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts uint64) {
+	p.hadFrames = true
 	p.lastPTS = pts
 	if len(nalus) > 0 && p.videoTrack != nil {
 		updatedSPS := false
