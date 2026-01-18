@@ -403,6 +403,11 @@ func (d *Demuxer) processSamples(trun *iso.AtomTrun, mdat []byte, baseTime uint6
 		dts := currentTime
 		pts := currentTime + uint64(cts)
 
+		if d.timeScale != 0 && d.timeScale != 90000 {
+			dts = dts * 90000 / uint64(d.timeScale)
+			pts = pts * 90000 / uint64(d.timeScale)
+		}
+
 		// Call frame callback
 		d.onFrame(nalus, keyframe, pts, dts)
 
