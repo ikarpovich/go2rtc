@@ -523,29 +523,6 @@ func findFragmentOffsets(data []byte) (moofStart uint32, mdatStart uint32, okMoo
 func (d *Demuxer) extractNALUs(sample []byte, keyframe bool) ([][]byte, error) {
 	var nalus [][]byte
 
-	// For keyframes, prepend SPS/PPS (H.264) or VPS/SPS/PPS (H.265)
-	if keyframe {
-		switch d.VideoCodec {
-		case "h264":
-			if d.SPS != nil {
-				nalus = append(nalus, d.SPS)
-			}
-			if d.PPS != nil {
-				nalus = append(nalus, d.PPS)
-			}
-		case "h265":
-			if d.VPS != nil {
-				nalus = append(nalus, d.VPS)
-			}
-			if d.SPS != nil {
-				nalus = append(nalus, d.SPS)
-			}
-			if d.PPS != nil {
-				nalus = append(nalus, d.PPS)
-			}
-		}
-	}
-
 	// Annex B samples include start codes.
 	if containsStartCode(sample) {
 		for _, nalu := range splitAnnexB(sample) {

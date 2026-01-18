@@ -473,12 +473,29 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 	if len(p.pendingPayload) > 0 && pts != p.pendingPTS {
 		p.flushPending()
 	}
+	isKey := false
+	for _, nalu := range nalus {
+		if len(nalu) > 0 && (nalu[0]&0x1F) == h264.NALUTypeIFrame {
+			isKey = true
+			break
+		}
+	}
+
+	if isKey && p.demuxer != nil {
+		if len(p.demuxer.SPS) > 0 {
+			nalus = append([][]byte{p.demuxer.SPS}, nalus...)
+		}
+		if len(p.demuxer.PPS) > 0 {
+			nalus = append([][]byte{p.demuxer.PPS}, nalus...)
+		}
+	}
+
 	if len(p.pendingPayload) == 0 {
 		p.pendingPTS = pts
-		p.pendingKey = keyframe
+		p.pendingKey = isKey
 		p.pendingHasSPS = false
 		p.pendingHasPPS = false
-	} else if keyframe {
+	} else if isKey {
 		p.pendingKey = true
 	}
 
