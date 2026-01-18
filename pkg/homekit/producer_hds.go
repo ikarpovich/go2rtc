@@ -499,23 +499,32 @@ func (p *HDSProducer) processMessages() error {
 func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts uint64) {
 	p.lastPTS = pts
 	if len(nalus) > 0 && p.videoTrack != nil {
+		updatedSPS := false
+		updatedPPS := false
 		for _, nalu := range nalus {
 			if len(nalu) == 0 {
 				continue
 			}
 			switch nalu[0] & 0x1F {
 			case h264.NALUTypeSPS:
-				if len(p.demuxer.SPS()) == 0 {
-					p.demuxer.SetSPS(stripStartCode(nalu))
+				sps := stripStartCode(nalu)
+				if len(sps) > 0 && !bytes.Equal(sps, p.demuxer.SPS()) {
+					p.demuxer.SetSPS(sps)
+					updatedSPS = true
+					if info := h264.DecodeSPS(sps); info != nil {
+						log.Printf("[homekit] HDS: SPS updated width=%d height=%d", info.Width(), info.Height())
+					}
 				}
 			case h264.NALUTypePPS:
-				if len(p.demuxer.PPS()) == 0 {
-					p.demuxer.SetPPS(stripStartCode(nalu))
+				pps := stripStartCode(nalu)
+				if len(pps) > 0 && !bytes.Equal(pps, p.demuxer.PPS()) {
+					p.demuxer.SetPPS(pps)
+					updatedPPS = true
 				}
 			}
 		}
 		if len(p.demuxer.SPS()) > 0 && len(p.demuxer.PPS()) > 0 &&
-			!strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
+			(updatedSPS || updatedPPS || !strings.Contains(p.videoTrack.Codec.FmtpLine, "sprop-parameter-sets=")) {
 			sps := p.demuxer.SPS()
 			pps := p.demuxer.PPS()
 			avcc := make([]byte, 0, len(sps)+len(pps)+8)

@@ -5,7 +5,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 
+	"github.com/AlexxIT/go2rtc/pkg/h264"
 	"github.com/Eyevinn/mp4ff/mp4"
 )
 
@@ -28,6 +30,11 @@ type hdsMP4FFDemuxer struct {
 	timeScale uint32
 	trex      *mp4.TrexBox
 	baseTime  uint64
+
+	lastPTS90       uint64
+	lastDTS90       uint64
+	fallbackDur90   uint64
+	loggedSampleMap bool
 }
 
 func newHDSMP4FFDemuxer() *hdsMP4FFDemuxer {
@@ -79,7 +86,21 @@ func (d *hdsMP4FFDemuxer) SetInit(data []byte) error {
 
 	avcC := videoTrack.Mdia.Minf.Stbl.Stsd.AvcX.AvcC
 	if len(avcC.SPSnalus) > 0 {
-		d.sps = avcC.SPSnalus[0]
+		bestSPS := avcC.SPSnalus[0]
+		bestArea := uint32(0)
+		for _, sps := range avcC.SPSnalus {
+			if info := h264.DecodeSPS(sps); info != nil {
+				area := uint32(info.Width()) * uint32(info.Height())
+				if area >= bestArea {
+					bestArea = area
+					bestSPS = sps
+				}
+			}
+		}
+		d.sps = bestSPS
+		if info := h264.DecodeSPS(bestSPS); info != nil {
+			log.Printf("[homekit] HDS: init SPS width=%d height=%d", info.Width(), info.Height())
+		}
 	}
 	if len(avcC.PPSnalus) > 0 {
 		d.pps = avcC.PPSnalus[0]
@@ -140,6 +161,25 @@ func (d *hdsMP4FFDemuxer) Demux(data []byte) error {
 					}
 
 					samples := trun.GetFullSamples(offsetInMdat, traf.Tfdt.BaseMediaDecodeTime(), frag.Mdat)
+					if !d.loggedSampleMap {
+						minDur, maxDur := uint32(0), uint32(0)
+						zeroDur := 0
+						for _, s := range samples {
+							if s.Dur == 0 {
+								zeroDur++
+								continue
+							}
+							if minDur == 0 || s.Dur < minDur {
+								minDur = s.Dur
+							}
+							if s.Dur > maxDur {
+								maxDur = s.Dur
+							}
+						}
+						log.Printf("[homekit] HDS: trun samples=%d hasDur=%v zeroDur=%d minDur=%d maxDur=%d",
+							len(samples), trun.HasSampleDuration(), zeroDur, minDur, maxDur)
+						d.loggedSampleMap = true
+					}
 					for _, sample := range samples {
 						if len(sample.Data) == 0 {
 							continue
@@ -166,6 +206,23 @@ func (d *hdsMP4FFDemuxer) Demux(data []byte) error {
 							pts = pts * 90000 / uint64(d.timeScale)
 							dts = dts * 90000 / uint64(d.timeScale)
 						}
+						if d.fallbackDur90 == 0 && sample.Dur > 0 && d.timeScale != 0 {
+							d.fallbackDur90 = uint64(sample.Dur) * 90000 / uint64(d.timeScale)
+						}
+						if d.fallbackDur90 == 0 {
+							d.fallbackDur90 = 90000 / 30
+						}
+						if d.lastDTS90 > 0 && dts <= d.lastDTS90 {
+							dts = d.lastDTS90 + d.fallbackDur90
+						}
+						if d.lastPTS90 > 0 && pts <= d.lastPTS90 {
+							pts = d.lastPTS90 + d.fallbackDur90
+						}
+						if pts < dts {
+							pts = dts
+						}
+						d.lastDTS90 = dts
+						d.lastPTS90 = pts
 
 						nalus, err := splitAVCC(sample.Data)
 						if err != nil {
