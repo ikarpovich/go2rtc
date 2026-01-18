@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -110,22 +111,57 @@ func (c *Client) startHDS() error {
 	log.Printf("[homekit] HDS: video track codec=%s", producer.videoTrack.Codec.Name)
 	producer.videoTrack.Codec.PayloadType = core.PayloadTypeRAW
 
-	// Setup fMP4 demuxer (mp4ff-backed for HDS only)
-	producer.demuxer = newHDSMP4FFDemuxer()
-	producer.demuxer.SetOnFrame(producer.handleVideoFrame)
+	for {
+		producer.resetForReconnect()
 
-	// Setup HDS transport
-	if err := producer.setupHDSTransport(); err != nil {
-		return fmt.Errorf("failed to setup HDS transport: %w", err)
+		// Setup HDS transport
+		if err := producer.setupHDSTransport(); err != nil {
+			return fmt.Errorf("failed to setup HDS transport: %w", err)
+		}
+
+		// Send hello and wait for the response before requesting a stream.
+		if err := producer.sendHello(); err != nil {
+			return fmt.Errorf("failed to send hello: %w", err)
+		}
+
+		// Process HDS messages (will request stream after hello)
+		if err := producer.processMessages(); err != nil {
+			if errors.Is(err, io.EOF) || strings.Contains(err.Error(), "stream closed") {
+				log.Printf("[homekit] HDS: stream ended (%v), reconnecting", err)
+				if producer.hdsConn != nil {
+					_ = producer.hdsConn.Close()
+				}
+				time.Sleep(500 * time.Millisecond)
+				continue
+			}
+			return err
+		}
+		return nil
 	}
+}
 
-	// Send hello and wait for the response before requesting a stream.
-	if err := producer.sendHello(); err != nil {
-		return fmt.Errorf("failed to send hello: %w", err)
-	}
-
-	// Process HDS messages (will request stream after hello)
-	return producer.processMessages()
+func (p *HDSProducer) resetForReconnect() {
+	p.demuxer = newHDSMP4FFDemuxer()
+	p.demuxer.SetOnFrame(p.handleVideoFrame)
+	p.pendingPayload = nil
+	p.pendingPTS = 0
+	p.pendingDTS = 0
+	p.pendingKey = false
+	p.pendingHasSPS = false
+	p.pendingHasPPS = false
+	p.lastInputDTS = 0
+	p.lastOutputDTS = 0
+	p.lastPTS = 0
+	p.frameDur = 0
+	p.loggedData = false
+	p.loggedTypes = false
+	p.loggedKeyframe = false
+	p.loggedPrefix = false
+	p.captureInitDone = false
+	p.captureStartPTS = 0
+	p.captureStartTime = 0
+	p.captureWindowsDone = 0
+	p.captureWindowIndex = 0
 }
 
 func (c *Client) applyRecordingConfig(acc *hap.Accessory) error {
