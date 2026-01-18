@@ -671,12 +671,27 @@ func (p *HDSProducer) applyInitSegment(initBuffer []byte) error {
 
 func (c *Client) prefetchHDSInit() {
 	c.hdsInitOnce.Do(func() {
-		videoTrack := c.trackByKind(core.KindVideo)
-		if videoTrack == nil || videoTrack.Codec == nil {
+		var videoMedia *core.Media
+		var videoCodec *core.Codec
+		for _, media := range c.Medias {
+			if media.Kind != core.KindVideo {
+				continue
+			}
+			for _, codec := range media.Codecs {
+				if codec.Name == core.CodecH264 {
+					videoMedia = media
+					videoCodec = codec
+					break
+				}
+			}
+			if videoCodec != nil {
+				break
+			}
+		}
+		if videoCodec == nil {
 			return
 		}
-		if videoTrack.Codec.Name != core.CodecH264 ||
-			strings.Contains(videoTrack.Codec.FmtpLine, "sprop-parameter-sets=") {
+		if strings.Contains(videoCodec.FmtpLine, "sprop-parameter-sets=") {
 			return
 		}
 		acc, err := c.hap.GetFirstAccessory()
@@ -687,20 +702,17 @@ func (c *Client) prefetchHDSInit() {
 		if acc.GetCharacter(camera.TypeSupportedDataStreamTransportConfiguration) == nil {
 			return
 		}
-		c.hdsInitErr = c.fetchHDSInit(2 * time.Second)
+		c.hdsInitErr = c.fetchHDSInit(videoMedia, videoCodec, 2*time.Second)
 		if c.hdsInitErr != nil {
 			log.Printf("[homekit] HDS: init prefetch failed: %v", c.hdsInitErr)
 		}
 	})
 }
 
-func (c *Client) fetchHDSInit(timeout time.Duration) error {
+func (c *Client) fetchHDSInit(videoMedia *core.Media, videoCodec *core.Codec, timeout time.Duration) error {
 	producer := &HDSProducer{
 		client:     c,
-		videoTrack: c.trackByKind(core.KindVideo),
-	}
-	if producer.videoTrack == nil {
-		return fmt.Errorf("no video track configured")
+		videoTrack: core.NewReceiver(videoMedia, videoCodec),
 	}
 	producer.resetForReconnect()
 
