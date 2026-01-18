@@ -159,9 +159,8 @@ func (p *HDSProducer) resetForReconnect() {
 	p.loggedPrefix = false
 	p.captureInitDone = false
 	p.captureStartPTS = 0
-	p.captureStartTime = 0
-	p.captureWindowsDone = 0
-	p.captureWindowIndex = 0
+	p.captureIndex = 0
+	p.captureBuf = nil
 }
 
 func (c *Client) applyRecordingConfig(acc *hap.Accessory) error {
