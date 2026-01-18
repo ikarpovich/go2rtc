@@ -37,6 +37,7 @@ type HDSProducer struct {
 
 	pendingPayload []byte
 	pendingPTS     uint64
+	pendingDTS     uint64
 	pendingKey     bool
 	pendingHasSPS  bool
 	pendingHasPPS  bool
@@ -509,6 +510,7 @@ func (p *HDSProducer) handleVideoFrame(nalus [][]byte, keyframe bool, pts, dts u
 
 	if len(p.pendingPayload) == 0 {
 		p.pendingPTS = pts
+		p.pendingDTS = dts
 		p.pendingKey = isKey
 		p.pendingHasSPS = false
 		p.pendingHasPPS = false
@@ -545,7 +547,7 @@ func (p *HDSProducer) flushPending() {
 	}
 
 	pkt := &rtp.Packet{
-		Header:  rtp.Header{Timestamp: uint32(p.pendingPTS)},
+		Header:  rtp.Header{Timestamp: uint32(p.pendingPTS), ExtensionProfile: hdsCTS(p.pendingPTS, p.pendingDTS)},
 		Payload: p.pendingPayload,
 	}
 
@@ -572,6 +574,17 @@ func (p *HDSProducer) flushPending() {
 	p.pendingKey = false
 	p.pendingHasSPS = false
 	p.pendingHasPPS = false
+}
+
+func hdsCTS(pts, dts uint64) uint16 {
+	if pts <= dts {
+		return 0
+	}
+	diff := pts - dts
+	if diff > 0xffff {
+		return 0
+	}
+	return uint16(diff)
 }
 
 func mapKeys(m map[string]any) []string {
